@@ -646,6 +646,14 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                     fmm_mpole_factory, fmm_local_factory, qbx_local_factory,
                     out_kernels)
 
+        elif self.fmm_backend == 'distributed':
+            from pytential.qbx.distributed import \
+                    QBXDistributedFMMLibExpansionWranglerCodeContainer
+            return QBXDistributedFMMLibExpansionWranglerCodeContainer(
+                self.cl_context,
+                fmm_mpole_factory, fmm_local_factory, qbx_local_factory,
+                out_kernels)
+
         else:
             raise ValueError("invalid FMM backend: %s" % self.fmm_backend)
 
@@ -726,9 +734,12 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
         # }}}
 
         # {{{ execute global QBX
-
-        from pytential.qbx.fmm import drive_fmm
-        all_potentials_on_every_tgt = drive_fmm(wrangler, strengths)
+        if self.fmm_backend == 'distributed':
+            from pytential.qbx.distributed import drive_dfmm
+            all_potentials_on_every_tgt = drive_dfmm(wrangler, strengths)
+        else:
+            from pytential.qbx.fmm import drive_fmm
+            all_potentials_on_every_tgt = drive_fmm(wrangler, strengths)
 
         # }}}
 

@@ -15,6 +15,9 @@ a.out
 hk
 test/*.pdf
 examples/*.pdf
+.idea
+.pytest_cache
+.vscode
 
 *.dot
 
