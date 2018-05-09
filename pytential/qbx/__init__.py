@@ -638,21 +638,13 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                     fmm_mpole_factory, fmm_local_factory, qbx_local_factory,
                     out_kernels)
 
-        elif self.fmm_backend == "fmmlib":
+        elif self.fmm_backend == "fmmlib" or self.fmm_backend == 'distributed':
             from pytential.qbx.fmmlib import \
                     QBXFMMLibExpansionWranglerCodeContainer
             return QBXFMMLibExpansionWranglerCodeContainer(
                     self.cl_context,
                     fmm_mpole_factory, fmm_local_factory, qbx_local_factory,
                     out_kernels)
-
-        elif self.fmm_backend == 'distributed':
-            from pytential.qbx.distributed import \
-                    QBXDistributedFMMLibExpansionWranglerCodeContainer
-            return QBXDistributedFMMLibExpansionWranglerCodeContainer(
-                self.cl_context,
-                fmm_mpole_factory, fmm_local_factory, qbx_local_factory,
-                out_kernels)
 
         else:
             raise ValueError("invalid FMM backend: %s" % self.fmm_backend)

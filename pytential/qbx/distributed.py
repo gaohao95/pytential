@@ -1,160 +1,221 @@
-from pytential.qbx.fmmlib import (
-    QBXFMMLibExpansionWranglerCodeContainer)
+from pytential.qbx.fmmlib import QBXFMMLibExpansionWrangler
+from boxtree.distributed import DistributedFMMLibExpansionWrangler, queue
+from boxtree.tree import FilteredTargetListsInTreeOrder
 from mpi4py import MPI
+import numpy as np
+
+import pyopencl as cl
 
 
 # {{{ Expansion Wrangler
 
-class QBXDistributedFMMLibExpansionWranglerCodeContainer(
-        QBXFMMLibExpansionWranglerCodeContainer):
-    pass
+class QBXDistributedFMMLibExpansionWrangler(
+        QBXFMMLibExpansionWrangler, DistributedFMMLibExpansionWrangler):
+
+    @classmethod
+    def distribute(cls, wrangler, distributed_geo_data, comm=MPI.COMM_WORLD):
+        if wrangler is not None:  # master process
+            import copy
+            distributed_wrangler = copy.copy(wrangler)
+            distributed_wrangler.queue = None
+            distributed_wrangler.geo_data = None
+            distributed_wrangler.code = None
+            distributed_wrangler.tree = None
+            distributed_wrangler.__class__ = cls
+        else:  # worker process
+            distributed_wrangler = None
+
+        distributed_wrangler = comm.bcast(distributed_wrangler, root=0)
+        distributed_wrangler.tree = distributed_geo_data.local_tree
+        distributed_wrangler.geo_data = distributed_geo_data
+
+        return distributed_wrangler
+
+# }}}
+
+
+# {{{
+
+class DistributedGeoData(object):
+    def __init__(self, geo_data, comm=MPI.COMM_WORLD):
+        self.comm = comm
+        current_rank = comm.Get_rank()
+        total_rank = comm.Get_size()
+
+        if geo_data is not None:  # master process
+            traversal = geo_data.traversal()
+            tree = traversal.tree
+            # ncenters = geo_data.ncenters
+            # centers = geo_data.centers()
+            # expansion_radii = geo_data.expansion_radii()
+            # global_qbx_centers = geo_data.global_qbx_centers()
+            # qbx_center_to_target_box = geo_data.qbx_center_to_target_box()
+            non_qbx_box_target_lists = geo_data.non_qbx_box_target_lists()
+            # center_to_tree_targets = geo_data.center_to_tree_targets()
+
+            nlevels = traversal.tree.nlevels
+            self.qbx_center_to_target_box_source_level = np.empty(
+                (nlevels,), dtype=object)
+            for level in range(nlevels):
+                self.qbx_center_to_target_box_source_level[level] = (
+                    geo_data.qbx_center_to_target_box_source_level(level))
+        else:  # worker process
+            traversal = None
+
+        from boxtree.distributed import generate_local_tree
+        self.local_tree, self.local_data, self.box_bounding_box, knls = \
+            generate_local_tree(traversal)
+
+        from boxtree.distributed import generate_local_travs
+        self.trav_local, self.trav_global = generate_local_travs(
+            self.local_tree, self.box_bounding_box, comm=comm)
+
+        # {{{ Distribute non_qbx_box_target_lists
+
+        if current_rank == 0:  # master process
+            box_target_starts = cl.array.to_device(
+                queue, non_qbx_box_target_lists.box_target_starts)
+            box_target_counts_nonchild = cl.array.to_device(
+                queue, non_qbx_box_target_lists.box_target_counts_nonchild)
+            nfiltered_targets = non_qbx_box_target_lists.nfiltered_targets
+            targets = non_qbx_box_target_lists.targets
+
+            reqs = np.empty((total_rank,), dtype=object)
+            local_non_qbx_box_target_lists = np.empty((total_rank,), dtype=object)
+
+            for irank in range(total_rank):
+                particle_mask = cl.array.zeros(queue, (nfiltered_targets,),
+                                               dtype=tree.particle_id_dtype)
+                knls["particle_mask_knl"](
+                    self.local_data[irank]["tgt_box_mask"],
+                    box_target_starts,
+                    box_target_counts_nonchild,
+                    particle_mask
+                )
+
+                particle_scan = cl.array.empty(queue, (nfiltered_targets + 1,),
+                                               dtype=tree.particle_id_dtype)
+                particle_scan[0] = 0
+                knls["mask_scan_knl"](particle_mask, particle_scan)
+
+                local_box_target_starts = cl.array.empty(
+                    queue, (tree.nboxes,), dtype=tree.particle_id_dtype)
+                knls["generate_box_particle_starts"](
+                    box_target_starts, particle_scan,
+                    local_box_target_starts
+                )
+
+                local_box_target_counts_nonchild = cl.array.zeros(
+                    queue, (tree.nboxes,), dtype=tree.particle_id_dtype)
+                knls["generate_box_particle_counts_nonchild"](
+                    self.local_data[irank]["tgt_box_mask"],
+                    box_target_counts_nonchild,
+                    local_box_target_counts_nonchild
+                )
+
+                local_nfiltered_targets = particle_scan[-1].get(queue)
+
+                particle_mask = particle_mask.get().astype(bool)
+                local_targets = np.empty((tree.dimensions,), dtype=object)
+                for idimension in range(tree.dimensions):
+                    local_targets[idimension] = targets[idimension][particle_mask]
+
+                local_non_qbx_box_target_lists[irank] = {
+                    "nfiltered_targets": local_nfiltered_targets,
+                    "box_target_starts": local_box_target_starts.get(),
+                    "box_target_counts_nonchild":
+                        local_box_target_counts_nonchild.get(),
+                    "targets": local_targets
+                }
+
+                reqs[irank] = comm.isend(local_non_qbx_box_target_lists[irank],
+                                         dest=irank, tag=0)
+
+            for irank in range(1, total_rank):
+                reqs[irank].wait()
+        if current_rank == 0:
+            local_non_qbx_box_target_lists = local_non_qbx_box_target_lists[0]
+        else:
+            local_non_qbx_box_target_lists = comm.recv(source=0, tag=0)
+
+        self._non_qbx_box_target_lists = FilteredTargetListsInTreeOrder(
+            nfiltered_targets=local_non_qbx_box_target_lists["nfiltered_targets"],
+            box_target_starts=local_non_qbx_box_target_lists["box_target_starts"],
+            box_target_counts_nonchild=local_non_qbx_box_target_lists[
+                "box_target_counts_nonchild"],
+            targets=local_non_qbx_box_target_lists["targets"],
+            unfiltered_from_filtered_target_indices=None
+        )
+
+        # }}}
+
+    def non_qbx_box_target_lists(self):
+        return self._non_qbx_box_target_lists
 
 # }}}
 
 
 # {{{ FMM Driver
 
-def drive_dfmm(expansion_wrangler, src_weights, comm=MPI.COMM_WORLD):
+def drive_dfmm(root_wrangler, src_weights, comm=MPI.COMM_WORLD,
+               _communicate_mpoles_via_allreduce=False):
     current_rank = comm.Get_rank()
-    # total_rank = comm.Get_size()
+    total_rank = comm.Get_size()
 
     if current_rank == 0:
-        wrangler = expansion_wrangler
-
-        geo_data = wrangler.geo_data
-        traversal = geo_data.traversal()
-        tree = traversal.tree
-
-        # Interface guidelines: Attributes of the tree are assumed to be known
-        # to the expansion wrangler and should not be passed.
-
-        src_weights = wrangler.reorder_sources(src_weights)
-
-        # {{{ construct local multipoles
-
-        mpole_exps = wrangler.form_multipoles(
-            traversal.level_start_source_box_nrs,
-            traversal.source_boxes,
-            src_weights)
-
-        # }}}
-
-        # {{{ propagate multipoles upward
-
-        wrangler.coarsen_multipoles(
-            traversal.level_start_source_parent_box_nrs,
-            traversal.source_parent_boxes,
-            mpole_exps)
-
-        # }}}
-
-        # {{{ direct evaluation from neighbor source boxes ("list 1")
-
-        non_qbx_potentials = wrangler.eval_direct(
-            traversal.target_boxes,
-            traversal.neighbor_source_boxes_starts,
-            traversal.neighbor_source_boxes_lists,
-            src_weights)
-
-        # }}}
-
-        # {{{ translate separated siblings' ("list 2") mpoles to local
-
-        local_exps = wrangler.multipole_to_local(
-            traversal.level_start_target_or_target_parent_box_nrs,
-            traversal.target_or_target_parent_boxes,
-            traversal.from_sep_siblings_starts,
-            traversal.from_sep_siblings_lists,
-            mpole_exps)
-
-        # }}}
-
-        # {{{ evaluate sep. smaller mpoles ("list 3") at particles
-
-        # (the point of aiming this stage at particles is specifically to keep its
-        # contribution *out* of the downward-propagating local expansions)
-
-        non_qbx_potentials = non_qbx_potentials + wrangler.eval_multipoles(
-            traversal.target_boxes_sep_smaller_by_source_level,
-            traversal.from_sep_smaller_by_level,
-            mpole_exps)
-
-        # assert that list 3 close has been merged into list 1
-        assert traversal.from_sep_close_smaller_starts is None
-
-        # }}}
-
-        # {{{ form locals for separated bigger source boxes ("list 4")
-
-        local_exps = local_exps + wrangler.form_locals(
-            traversal.level_start_target_or_target_parent_box_nrs,
-            traversal.target_or_target_parent_boxes,
-            traversal.from_sep_bigger_starts,
-            traversal.from_sep_bigger_lists,
-            src_weights)
-
-        # assert that list 4 close has been merged into list 1
-        assert traversal.from_sep_close_bigger_starts is None
-
-        # }}}
-
-        # {{{ propagate local_exps downward
-
-        wrangler.refine_locals(
-            traversal.level_start_target_or_target_parent_box_nrs,
-            traversal.target_or_target_parent_boxes,
-            local_exps)
-
-        # }}}
-
-        # {{{ evaluate locals
-
-        non_qbx_potentials = non_qbx_potentials + wrangler.eval_locals(
-            traversal.level_start_target_box_nrs,
-            traversal.target_boxes,
-            local_exps)
-
-        # }}}
-
-        # {{{ wrangle qbx expansions
-
-        qbx_expansions = wrangler.form_global_qbx_locals(src_weights)
-
-        qbx_expansions = qbx_expansions + \
-                         wrangler.translate_box_multipoles_to_qbx_local(mpole_exps)
-
-        qbx_expansions = qbx_expansions + \
-                         wrangler.translate_box_local_to_qbx_local(local_exps)
-
-        qbx_potentials = wrangler.eval_qbx_expansions(
-            qbx_expansions)
-
-        # }}}
-
-        # {{{ reorder potentials
-
-        nqbtl = geo_data.non_qbx_box_target_lists()
-
-        all_potentials_in_tree_order = wrangler.full_output_zeros()
-
-        for ap_i, nqp_i in zip(all_potentials_in_tree_order, non_qbx_potentials):
-            ap_i[nqbtl.unfiltered_from_filtered_target_indices] = nqp_i
-
-        all_potentials_in_tree_order += qbx_potentials
-
-        def reorder_and_finalize_potentials(x):
-            # "finalize" gives host FMMs (like FMMlib) a chance to turn the
-            # potential back into a CL array.
-            return wrangler.finalize_potentials(x[tree.sorted_target_ids])
-
-        from pytools.obj_array import with_object_array_or_scalar
-        result = with_object_array_or_scalar(
-            reorder_and_finalize_potentials, all_potentials_in_tree_order)
-
-        # }}}
-
-        return result
+        distributed_geo_data = DistributedGeoData(root_wrangler.geo_data)
     else:
-        pass
+        distributed_geo_data = DistributedGeoData(None)
+
+    distributed_wrangler = QBXDistributedFMMLibExpansionWrangler.distribute(
+        root_wrangler, distributed_geo_data)
+    wrangler = distributed_wrangler
+
+    local_traversal = distributed_geo_data.trav_local
+    global_traversal = distributed_geo_data.trav_global
+
+    # {{{ Distribute source weights
+
+    if current_rank == 0:
+        global_tree = root_wrangler.geo_data.tree()
+        src_weights = root_wrangler.reorder_sources(src_weights)
+    else:
+        global_tree = None
+
+    from boxtree.distributed import distribute_source_weights
+    local_source_weights = distribute_source_weights(
+        src_weights, global_tree, distributed_geo_data.local_data, comm=comm)
+
+    # }}}
+
+    # {{{ construct local multipoles
+
+    mpole_exps = wrangler.form_multipoles(
+            local_traversal.level_start_source_box_nrs,
+            local_traversal.source_boxes,
+            local_source_weights)
+
+    # }}}
+
+    # {{{ propagate multipoles upward
+
+    wrangler.coarsen_multipoles(
+            local_traversal.level_start_source_parent_box_nrs,
+            local_traversal.source_parent_boxes,
+            mpole_exps)
+
+    # }}}
+
+    # {{{ direct evaluation from neighbor source boxes ("list 1")
+
+    non_qbx_potentials = wrangler.eval_direct(
+            global_traversal.target_boxes,
+            global_traversal.neighbor_source_boxes_starts,
+            global_traversal.neighbor_source_boxes_lists,
+            local_source_weights)
+
+    # }}}
+
+    return None
 
 # }}}
