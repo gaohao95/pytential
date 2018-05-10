@@ -6,6 +6,15 @@ import numpy as np
 
 import pyopencl as cl
 
+# {{{ MPITags used in this module
+
+MPITags = {
+    "non_qbx_box_target_lists": 0,
+    "global_qbx_centers": 1
+}
+
+# }}}
+
 
 # {{{ Expansion Wrangler
 
@@ -45,10 +54,10 @@ class DistributedGeoData(object):
         if geo_data is not None:  # master process
             traversal = geo_data.traversal()
             tree = traversal.tree
-            # ncenters = geo_data.ncenters
+            ncenters = geo_data.ncenters
             # centers = geo_data.centers()
             # expansion_radii = geo_data.expansion_radii()
-            # global_qbx_centers = geo_data.global_qbx_centers()
+            global_qbx_centers = geo_data.global_qbx_centers()
             # qbx_center_to_target_box = geo_data.qbx_center_to_target_box()
             non_qbx_box_target_lists = geo_data.non_qbx_box_target_lists()
             # center_to_tree_targets = geo_data.center_to_tree_targets()
@@ -128,15 +137,20 @@ class DistributedGeoData(object):
                     "targets": local_targets
                 }
 
-                reqs[irank] = comm.isend(local_non_qbx_box_target_lists[irank],
-                                         dest=irank, tag=0)
+                if irank != 0:
+                    reqs[irank] = comm.isend(
+                        local_non_qbx_box_target_lists[irank],
+                        dest=irank,
+                        tag=MPITags["non_qbx_box_target_lists"]
+                    )
 
             for irank in range(1, total_rank):
                 reqs[irank].wait()
         if current_rank == 0:
             local_non_qbx_box_target_lists = local_non_qbx_box_target_lists[0]
         else:
-            local_non_qbx_box_target_lists = comm.recv(source=0, tag=0)
+            local_non_qbx_box_target_lists = comm.recv(
+                source=0, tag=MPITags["non_qbx_box_target_lists"])
 
         self._non_qbx_box_target_lists = FilteredTargetListsInTreeOrder(
             nfiltered_targets=local_non_qbx_box_target_lists["nfiltered_targets"],
@@ -149,8 +163,43 @@ class DistributedGeoData(object):
 
         # }}}
 
+        # {{{ Distribute global_qbx_centers
+
+        if current_rank == 0:
+            local_global_qbx_centers = np.empty((total_rank,), dtype=object)
+            for irank in range(total_rank):
+                tgt_mask = self.local_data[irank]["tgt_mask"].get().astype(bool)
+                tgt_mask_user_order = tgt_mask[tree.sorted_target_ids]
+                centers_mask = tgt_mask_user_order[:ncenters]
+                local_global_qbx_centers[irank] = global_qbx_centers[
+                    centers_mask[global_qbx_centers]]
+
+                if irank != 0:
+                    reqs[irank] = comm.isend(
+                        local_global_qbx_centers[irank],
+                        dest=irank,
+                        tag=MPITags["global_qbx_centers"]
+                    )
+
+            for irank in range(1, total_rank):
+                reqs[irank].wait()
+            local_global_qbx_centers = local_global_qbx_centers[0]
+        else:
+            local_global_qbx_centers = comm.recv(
+                source=0, tag=MPITags["global_qbx_centers"])
+
+        self._global_qbx_centers = local_global_qbx_centers
+
+        # }}}
+
     def non_qbx_box_target_lists(self):
         return self._non_qbx_box_target_lists
+
+    def traversal(self):
+        return self.trav_global
+
+    def global_qbx_centers(self):
+        return self._global_qbx_centers
 
 # }}}
 
@@ -191,28 +240,102 @@ def drive_dfmm(root_wrangler, src_weights, comm=MPI.COMM_WORLD,
     # {{{ construct local multipoles
 
     mpole_exps = wrangler.form_multipoles(
-            local_traversal.level_start_source_box_nrs,
-            local_traversal.source_boxes,
-            local_source_weights)
+        local_traversal.level_start_source_box_nrs,
+        local_traversal.source_boxes,
+        local_source_weights)
 
     # }}}
 
     # {{{ propagate multipoles upward
 
     wrangler.coarsen_multipoles(
-            local_traversal.level_start_source_parent_box_nrs,
-            local_traversal.source_parent_boxes,
-            mpole_exps)
+        local_traversal.level_start_source_parent_box_nrs,
+        local_traversal.source_parent_boxes,
+        mpole_exps)
 
     # }}}
 
     # {{{ direct evaluation from neighbor source boxes ("list 1")
 
     non_qbx_potentials = wrangler.eval_direct(
+        global_traversal.target_boxes,
+        global_traversal.neighbor_source_boxes_starts,
+        global_traversal.neighbor_source_boxes_lists,
+        local_source_weights)
+
+    # }}}
+
+    # {{{ translate separated siblings' ("list 2") mpoles to local
+
+    local_exps = wrangler.multipole_to_local(
+        global_traversal.level_start_target_or_target_parent_box_nrs,
+        global_traversal.target_or_target_parent_boxes,
+        global_traversal.from_sep_siblings_starts,
+        global_traversal.from_sep_siblings_lists,
+        mpole_exps)
+
+    # }}}
+
+    # {{{ evaluate sep. smaller mpoles ("list 3") at particles
+
+    # (the point of aiming this stage at particles is specifically to keep its
+    # contribution *out* of the downward-propagating local expansions)
+
+    non_qbx_potentials = non_qbx_potentials + wrangler.eval_multipoles(
+        global_traversal.target_boxes_sep_smaller_by_source_level,
+        global_traversal.from_sep_smaller_by_level,
+        mpole_exps)
+
+    # assert that list 3 close has been merged into list 1
+    # assert global_traversal.from_sep_close_smaller_starts is None
+    if global_traversal.from_sep_close_smaller_starts is not None:
+        non_qbx_potentials = non_qbx_potentials + wrangler.eval_direct(
             global_traversal.target_boxes,
-            global_traversal.neighbor_source_boxes_starts,
-            global_traversal.neighbor_source_boxes_lists,
+            global_traversal.from_sep_close_smaller_starts,
+            global_traversal.from_sep_close_smaller_lists,
             local_source_weights)
+
+    # }}}
+
+    # {{{ form locals for separated bigger source boxes ("list 4")
+
+    local_exps = local_exps + wrangler.form_locals(
+        global_traversal.level_start_target_or_target_parent_box_nrs,
+        global_traversal.target_or_target_parent_boxes,
+        global_traversal.from_sep_bigger_starts,
+        global_traversal.from_sep_bigger_lists,
+        local_source_weights)
+
+    if global_traversal.from_sep_close_bigger_starts is not None:
+        non_qbx_potentials = non_qbx_potentials + wrangler.eval_direct(
+            global_traversal.target_or_target_parent_boxes,
+            global_traversal.from_sep_close_bigger_starts,
+            global_traversal.from_sep_close_bigger_lists,
+            local_source_weights)
+
+    # }}}
+
+    # {{{ propagate local_exps downward
+
+    wrangler.refine_locals(
+        global_traversal.level_start_target_or_target_parent_box_nrs,
+        global_traversal.target_or_target_parent_boxes,
+        local_exps)
+
+    # }}}
+
+    # {{{ evaluate locals
+
+    non_qbx_potentials = non_qbx_potentials + wrangler.eval_locals(
+        global_traversal.level_start_target_box_nrs,
+        global_traversal.target_boxes,
+        local_exps)
+
+    # }}}
+
+    # {{{ wrangle qbx expansions
+
+    qbx_expansions = wrangler.form_global_qbx_locals(src_weights)
 
     # }}}
 
