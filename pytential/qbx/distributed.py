@@ -10,7 +10,9 @@ import pyopencl as cl
 
 MPITags = {
     "non_qbx_box_target_lists": 0,
-    "global_qbx_centers": 1
+    "global_qbx_centers": 1,
+    "centers": 2,
+    "dipole_vec": 3
 }
 
 # }}}
@@ -23,6 +25,9 @@ class QBXDistributedFMMLibExpansionWrangler(
 
     @classmethod
     def distribute(cls, wrangler, distributed_geo_data, comm=MPI.COMM_WORLD):
+        current_rank = comm.Get_rank()
+        total_rank = comm.Get_size()
+
         if wrangler is not None:  # master process
             import copy
             distributed_wrangler = copy.copy(wrangler)
@@ -30,6 +35,7 @@ class QBXDistributedFMMLibExpansionWrangler(
             distributed_wrangler.geo_data = None
             distributed_wrangler.code = None
             distributed_wrangler.tree = None
+            distributed_wrangler.dipole_vec = None
             distributed_wrangler.__class__ = cls
         else:  # worker process
             distributed_wrangler = None
@@ -37,6 +43,30 @@ class QBXDistributedFMMLibExpansionWrangler(
         distributed_wrangler = comm.bcast(distributed_wrangler, root=0)
         distributed_wrangler.tree = distributed_geo_data.local_tree
         distributed_wrangler.geo_data = distributed_geo_data
+
+        # {{{ Distribute dipole_vec
+
+        if current_rank == 0:
+            reqs_dipole_vec = np.empty((total_rank,), dtype=object)
+            local_dipole_vec = np.empty((total_rank,), dtype=object)
+            for irank in range(total_rank):
+                src_mask = distributed_geo_data.local_data[irank]["src_mask"].get()
+                local_dipole_vec[irank] = \
+                    wrangler.dipole_vec[:, src_mask.astype(bool)]
+                reqs_dipole_vec[irank] = comm.isend(
+                    local_dipole_vec[irank],
+                    dest=irank,
+                    tag=MPITags["dipole_vec"]
+                )
+
+            for irank in range(1, total_rank):
+                reqs_dipole_vec[irank].wait()
+            distributed_wrangler.dipole_vec = local_dipole_vec[0]
+        else:
+            distributed_wrangler.dipole_vec = comm.recv(
+                source=0, tag=MPITags["dipole_vec"])
+
+        # }}}
 
         return distributed_wrangler
 
@@ -54,20 +84,22 @@ class DistributedGeoData(object):
         if geo_data is not None:  # master process
             traversal = geo_data.traversal()
             tree = traversal.tree
+            nlevels = tree.nlevels
+
             ncenters = geo_data.ncenters
-            # centers = geo_data.centers()
+            centers = geo_data.centers()
             # expansion_radii = geo_data.expansion_radii()
             global_qbx_centers = geo_data.global_qbx_centers()
             # qbx_center_to_target_box = geo_data.qbx_center_to_target_box()
             non_qbx_box_target_lists = geo_data.non_qbx_box_target_lists()
             # center_to_tree_targets = geo_data.center_to_tree_targets()
 
-            nlevels = traversal.tree.nlevels
-            self.qbx_center_to_target_box_source_level = np.empty(
+            qbx_center_to_target_box_source_level = np.empty(
                 (nlevels,), dtype=object)
             for level in range(nlevels):
-                self.qbx_center_to_target_box_source_level[level] = (
+                qbx_center_to_target_box_source_level[level] = (
                     geo_data.qbx_center_to_target_box_source_level(level))
+
         else:  # worker process
             traversal = None
 
@@ -163,31 +195,61 @@ class DistributedGeoData(object):
 
         # }}}
 
-        # {{{ Distribute global_qbx_centers
+        # {{{ Distribute global_qbx_centers and centers
 
         if current_rank == 0:
             local_global_qbx_centers = np.empty((total_rank,), dtype=object)
+            local_centers = np.empty((total_rank,), dtype=object)
+            reqs_centers = np.empty((total_rank,), dtype=object)
+            reqs_global_qbx_centers = np.empty((total_rank,), dtype=object)
+
             for irank in range(total_rank):
                 tgt_mask = self.local_data[irank]["tgt_mask"].get().astype(bool)
                 tgt_mask_user_order = tgt_mask[tree.sorted_target_ids]
                 centers_mask = tgt_mask_user_order[:ncenters]
+
+                # {{{ Distribute centers
+
+                nlocal_centers = np.sum(centers_mask.astype(np.int32))
+                centers_dims = centers.shape[0]
+                local_centers[irank] = np.empty((centers_dims, nlocal_centers),
+                                                dtype=centers[0].dtype)
+                for idims in range(centers_dims):
+                    local_centers[irank][idims][:] = centers[idims][centers_mask]
+
+                if irank != 0:
+                    reqs_centers[irank] = comm.isend(
+                        local_centers[irank],
+                        dest=irank,
+                        tag=MPITags["centers"]
+                    )
+
+                # }}}
+
                 local_global_qbx_centers[irank] = global_qbx_centers[
                     centers_mask[global_qbx_centers]]
 
                 if irank != 0:
-                    reqs[irank] = comm.isend(
+                    reqs_global_qbx_centers[irank] = comm.isend(
                         local_global_qbx_centers[irank],
                         dest=irank,
                         tag=MPITags["global_qbx_centers"]
                     )
 
             for irank in range(1, total_rank):
-                reqs[irank].wait()
+                reqs_centers[irank].wait()
+            local_centers = local_centers[0]
+
+            for irank in range(1, total_rank):
+                reqs_global_qbx_centers[irank].wait()
             local_global_qbx_centers = local_global_qbx_centers[0]
         else:
+            local_centers = comm.recv(
+                source=0, tag=MPITags["centers"])
             local_global_qbx_centers = comm.recv(
                 source=0, tag=MPITags["global_qbx_centers"])
 
+        self._local_centers = local_centers
         self._global_qbx_centers = local_global_qbx_centers
 
         # }}}
@@ -197,6 +259,13 @@ class DistributedGeoData(object):
 
     def traversal(self):
         return self.trav_global
+
+    def centers(self):
+        return self._local_centers
+
+    @property
+    def ncenters(self):
+        return self._local_centers.shape[1]
 
     def global_qbx_centers(self):
         return self._global_qbx_centers
@@ -335,7 +404,7 @@ def drive_dfmm(root_wrangler, src_weights, comm=MPI.COMM_WORLD,
 
     # {{{ wrangle qbx expansions
 
-    qbx_expansions = wrangler.form_global_qbx_locals(src_weights)
+    qbx_expansions = wrangler.form_global_qbx_locals(local_source_weights)
 
     # }}}
 
