@@ -12,7 +12,9 @@ MPITags = {
     "non_qbx_box_target_lists": 0,
     "global_qbx_centers": 1,
     "centers": 2,
-    "dipole_vec": 3
+    "dipole_vec": 3,
+    "expansion_radii": 4,
+    "qbx_center_to_target_box": 5
 }
 
 # }}}
@@ -88,9 +90,9 @@ class DistributedGeoData(object):
 
             ncenters = geo_data.ncenters
             centers = geo_data.centers()
-            # expansion_radii = geo_data.expansion_radii()
+            expansion_radii = geo_data.expansion_radii()
             global_qbx_centers = geo_data.global_qbx_centers()
-            # qbx_center_to_target_box = geo_data.qbx_center_to_target_box()
+            qbx_center_to_target_box = geo_data.qbx_center_to_target_box()
             non_qbx_box_target_lists = geo_data.non_qbx_box_target_lists()
             # center_to_tree_targets = geo_data.center_to_tree_targets()
 
@@ -195,18 +197,28 @@ class DistributedGeoData(object):
 
         # }}}
 
-        # {{{ Distribute global_qbx_centers and centers
+        # {{{ Distribute global_qbx_centers, centers and expansion_radii
 
         if current_rank == 0:
             local_global_qbx_centers = np.empty((total_rank,), dtype=object)
             local_centers = np.empty((total_rank,), dtype=object)
+            local_expansion_radii = np.empty((total_rank,), dtype=object)
+            local_qbx_center_to_target_box = np.empty((total_rank,), dtype=object)
+
             reqs_centers = np.empty((total_rank,), dtype=object)
             reqs_global_qbx_centers = np.empty((total_rank,), dtype=object)
+            reqs_expansion_radii = np.empty((total_rank,), dtype=object)
+            reqs_qbx_center_to_target_box = np.empty((total_rank,), dtype=object)
 
             for irank in range(total_rank):
                 tgt_mask = self.local_data[irank]["tgt_mask"].get().astype(bool)
                 tgt_mask_user_order = tgt_mask[tree.sorted_target_ids]
                 centers_mask = tgt_mask_user_order[:ncenters]
+                centers_scan = np.empty(
+                    (ncenters + 1,), dtype=tree.particle_id_dtype)
+                centers_scan[1:] = np.cumsum(
+                    centers_mask.astype(tree.particle_id_dtype))
+                centers_scan[0] = 0
 
                 # {{{ Distribute centers
 
@@ -226,8 +238,10 @@ class DistributedGeoData(object):
 
                 # }}}
 
-                local_global_qbx_centers[irank] = global_qbx_centers[
-                    centers_mask[global_qbx_centers]]
+                # {{{ Distribute global_qbx_centers
+
+                local_global_qbx_centers[irank] = centers_scan[
+                    global_qbx_centers[centers_mask[global_qbx_centers]]]
 
                 if irank != 0:
                     reqs_global_qbx_centers[irank] = comm.isend(
@@ -236,6 +250,38 @@ class DistributedGeoData(object):
                         tag=MPITags["global_qbx_centers"]
                     )
 
+                # }}}
+
+                # {{{ Distribute expansion_radii
+
+                local_expansion_radii[irank] = expansion_radii[centers_mask]
+                if irank != 0:
+                    reqs_expansion_radii[irank] = comm.isend(
+                        local_expansion_radii[irank],
+                        dest=irank,
+                        tag=MPITags["expansion_radii"]
+                    )
+
+                # }}}
+
+                # {{{ Distribute qbx_center_to_target_box
+
+                # Note: The code transforms qbx_center_to_target_box to global box
+                # indexing from target_boxes before transmission. Each process is
+                # expected to transform back to target_boxes indexing based its own
+                # traversal object.
+
+                local_qbx_center_to_target_box[irank] = \
+                    traversal.target_boxes[qbx_center_to_target_box[centers_mask]]
+                if irank != 0:
+                    reqs_qbx_center_to_target_box[irank] = comm.isend(
+                        local_qbx_center_to_target_box[irank],
+                        dest=irank,
+                        tag=MPITags["qbx_center_to_target_box"]
+                    )
+
+                # }}}
+
             for irank in range(1, total_rank):
                 reqs_centers[irank].wait()
             local_centers = local_centers[0]
@@ -243,14 +289,39 @@ class DistributedGeoData(object):
             for irank in range(1, total_rank):
                 reqs_global_qbx_centers[irank].wait()
             local_global_qbx_centers = local_global_qbx_centers[0]
+
+            for irank in range(1, total_rank):
+                reqs_expansion_radii[irank].wait()
+            local_expansion_radii = local_expansion_radii[0]
+
+            for irank in range(1, total_rank):
+                reqs_qbx_center_to_target_box[irank].wait()
+            local_qbx_center_to_target_box = local_qbx_center_to_target_box[0]
+
         else:
             local_centers = comm.recv(
                 source=0, tag=MPITags["centers"])
             local_global_qbx_centers = comm.recv(
                 source=0, tag=MPITags["global_qbx_centers"])
+            local_expansion_radii = comm.recv(
+                source=0, tag=MPITags["expansion_radii"])
+            local_qbx_center_to_target_box = comm.recv(
+                source=0, tag=MPITags["qbx_center_to_target_box"]
+            )
 
         self._local_centers = local_centers
         self._global_qbx_centers = local_global_qbx_centers
+        self._expansion_radii = local_expansion_radii
+
+        # Transform local_qbx_center_to_target_box to target_boxes indexing
+        global_boxes_to_target_boxes = np.ones(
+            (self.local_tree.nboxes,), dtype=self.local_tree.particle_id_dtype)
+        # make sure accessing invalid position raises an error
+        global_boxes_to_target_boxes *= -1
+        global_boxes_to_target_boxes[self.trav_global.target_boxes] = \
+            np.arange(self.trav_global.target_boxes.shape[0])
+        self._local_qbx_center_to_target_box = \
+            global_boxes_to_target_boxes[local_qbx_center_to_target_box]
 
         # }}}
 
@@ -269,6 +340,12 @@ class DistributedGeoData(object):
 
     def global_qbx_centers(self):
         return self._global_qbx_centers
+
+    def expansion_radii(self):
+        return self._expansion_radii
+
+    def qbx_center_to_target_box(self):
+        return self._local_qbx_center_to_target_box
 
 # }}}
 
