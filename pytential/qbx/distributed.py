@@ -412,11 +412,48 @@ class DistributedGeoData(object):
 
         # }}}
 
+        # {{{ Construct qbx_center_to_target_box_source_level
+
+        # This is modified from pytential.geometry.QBXFMMGeometryData.
+        # qbx_center_to_target_box_source_level but on host using Numpy instead of
+        # PyOpenCL.
+
+        traversal = self.traversal()
+        qbx_center_to_target_box = self.qbx_center_to_target_box()
+        tree = traversal.tree
+
+        self._qbx_center_to_target_box_source_level = np.empty(
+            (tree.nlevels,), dtype=object)
+
+        for source_level in range(tree.nlevels):
+            sep_smaller = traversal.from_sep_smaller_by_level[source_level]
+
+            target_box_to_target_box_source_level = np.empty(
+                len(traversal.target_boxes),
+                dtype=tree.box_id_dtype
+            )
+            target_box_to_target_box_source_level.fill(-1)
+            target_box_to_target_box_source_level[sep_smaller.nonempty_indices] = (
+                np.arange(sep_smaller.num_nonempty_lists,
+                          dtype=tree.box_id_dtype)
+            )
+
+            self._qbx_center_to_target_box_source_level[source_level] = (
+                target_box_to_target_box_source_level[
+                    qbx_center_to_target_box
+                ]
+            )
+
+        # }}}
+
     def non_qbx_box_target_lists(self):
         return self._non_qbx_box_target_lists
 
     def traversal(self):
         return self.trav_global
+
+    def tree(self):
+        return self.traversal().tree
 
     def centers(self):
         return self._local_centers
@@ -434,11 +471,14 @@ class DistributedGeoData(object):
     def qbx_center_to_target_box(self):
         return self._local_qbx_center_to_target_box
 
-    def local_center_to_tree_targets(self):
+    def center_to_tree_targets(self):
         return self._local_center_to_tree_targets
 
     def qbx_targets(self):
         return self._qbx_targets
+
+    def qbx_center_to_target_box_source_level(self, source_level):
+        return self._qbx_center_to_target_box_source_level[source_level]
 
 # }}}
 
@@ -575,6 +615,14 @@ def drive_dfmm(root_wrangler, src_weights, comm=MPI.COMM_WORLD,
     # {{{ wrangle qbx expansions
 
     qbx_expansions = wrangler.form_global_qbx_locals(local_source_weights)
+
+    qbx_expansions = qbx_expansions + \
+        wrangler.translate_box_multipoles_to_qbx_local(mpole_exps)
+
+    qbx_expansions = qbx_expansions + \
+        wrangler.translate_box_local_to_qbx_local(local_exps)
+
+    # qbx_potentials = wrangler.eval_qbx_expansions(qbx_expansions)
 
     # }}}
 
