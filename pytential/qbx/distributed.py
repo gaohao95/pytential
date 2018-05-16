@@ -576,6 +576,19 @@ def drive_dfmm(root_wrangler, src_weights, comm=MPI.COMM_WORLD,
 
     # }}}
 
+    # {{{ Communicate mpoles
+
+    from boxtree.distributed import communicate_mpoles
+
+    if _communicate_mpoles_via_allreduce:
+        mpole_exps_all = np.zeros_like(mpole_exps)
+        comm.Allreduce(mpole_exps, mpole_exps_all)
+        mpole_exps = mpole_exps_all
+    else:
+        communicate_mpoles(wrangler, comm, local_traversal, mpole_exps)
+
+    # }}}
+
     # {{{ direct evaluation from neighbor source boxes ("list 1")
 
     non_qbx_potentials = wrangler.eval_direct(
@@ -725,8 +738,6 @@ def drive_dfmm(root_wrangler, src_weights, comm=MPI.COMM_WORLD,
         from pytools.obj_array import with_object_array_or_scalar
         result = with_object_array_or_scalar(
             reorder_and_finalize_potentials, all_potentials_in_tree_order)
-
-        # }}}
 
         return result
 
