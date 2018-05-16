@@ -17,7 +17,8 @@ MPITags = {
     "qbx_center_to_target_box": 5,
     "center_to_tree_targets": 6,
     "qbx_targets": 7,
-    "non_qbx_potentials": 8
+    "non_qbx_potentials": 8,
+    "qbx_potentials": 9
 }
 
 # }}}
@@ -253,6 +254,7 @@ class DistributedGeoData(object):
             reqs_qbx_center_to_target_box = np.empty((total_rank,), dtype=object)
             reqs_center_to_tree_targets = np.empty((total_rank,), dtype=object)
             reqs_qbx_targets = np.empty((total_rank,), dtype=object)
+            self.qbx_target_mask = np.empty((total_rank,), dtype=object)
 
             for irank in range(total_rank):
                 tgt_mask = self.local_data[irank]["tgt_mask"].get().astype(bool)
@@ -353,6 +355,8 @@ class DistributedGeoData(object):
 
                     current_start = current_stop
                     ilocal_center += 1
+
+                self.qbx_target_mask[irank] = qbx_target_mask
 
                 local_lists = local_lists[:current_start]
 
@@ -666,6 +670,7 @@ def drive_dfmm(root_wrangler, src_weights, comm=MPI.COMM_WORLD,
 
     if current_rank != 0:  # worker process
         comm.send(non_qbx_potentials, dest=0, tag=MPITags["non_qbx_potentials"])
+        comm.send(qbx_potentials, dest=0, tag=MPITags["qbx_potentials"])
         return None
 
     else:  # master process
@@ -697,6 +702,32 @@ def drive_dfmm(root_wrangler, src_weights, comm=MPI.COMM_WORLD,
                 all_potentials_in_tree_order, non_qbx_potentials_all_rank):
             ap_i[nqbtl.unfiltered_from_filtered_target_indices] = nqp_i
 
-    return None
+        for irank in range(total_rank):
+
+            if irank == 0:
+                qbx_potentials_cur_rank = qbx_potentials
+            else:
+                qbx_potentials_cur_rank = comm.recv(
+                    source=irank, tag=MPITags["qbx_potentials"]
+                )
+
+            for idim in range(len(root_wrangler.outputs)):
+                all_potentials_in_tree_order[idim][
+                    distributed_geo_data.qbx_target_mask[irank]
+                ] = qbx_potentials_cur_rank[idim]
+
+        def reorder_and_finalize_potentials(x):
+            # "finalize" gives host FMMs (like FMMlib) a chance to turn the
+            # potential back into a CL array.
+            return root_wrangler.finalize_potentials(
+                x[root_wrangler.tree.sorted_target_ids])
+
+        from pytools.obj_array import with_object_array_or_scalar
+        result = with_object_array_or_scalar(
+            reorder_and_finalize_potentials, all_potentials_in_tree_order)
+
+        # }}}
+
+        return result
 
 # }}}
