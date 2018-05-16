@@ -16,7 +16,8 @@ MPITags = {
     "expansion_radii": 4,
     "qbx_center_to_target_box": 5,
     "center_to_tree_targets": 6,
-    "qbx_targets": 7
+    "qbx_targets": 7,
+    "non_qbx_potentials": 8
 }
 
 # }}}
@@ -74,6 +75,41 @@ class QBXDistributedFMMLibExpansionWrangler(
 
         return distributed_wrangler
 
+    def eval_qbx_expansions(self, qbx_expansions):
+        geo_data = self.geo_data
+        ctt = geo_data.center_to_tree_targets()
+        global_qbx_centers = geo_data.global_qbx_centers()
+        qbx_centers = geo_data.centers()
+        qbx_radii = geo_data.expansion_radii()
+
+        from pytools.obj_array import make_obj_array
+        output = make_obj_array([np.zeros(len(ctt.lists), self.dtype)
+                                 for k in self.outputs])
+
+        all_targets = geo_data.qbx_targets()
+
+        taeval = self.get_expn_eval_routine("ta")
+
+        for isrc_center, src_icenter in enumerate(global_qbx_centers):
+            for icenter_tgt in range(
+                    ctt.starts[src_icenter],
+                    ctt.starts[src_icenter+1]):
+
+                center_itgt = ctt.lists[icenter_tgt]
+
+                center = qbx_centers[:, src_icenter]
+
+                pot, grad = taeval(
+                        rscale=qbx_radii[src_icenter],
+                        center=center,
+                        expn=qbx_expansions[src_icenter].T,
+                        ztarg=all_targets[:, center_itgt],
+                        **self.kernel_kwargs)
+
+                self.add_potgrad_onto_output(output, center_itgt, pot, grad)
+
+        return output
+
 # }}}
 
 
@@ -127,6 +163,7 @@ class DistributedGeoData(object):
 
             reqs = np.empty((total_rank,), dtype=object)
             local_non_qbx_box_target_lists = np.empty((total_rank,), dtype=object)
+            self.particle_mask = np.empty((total_rank,), dtype=object)
 
             for irank in range(total_rank):
                 particle_mask = cl.array.zeros(queue, (nfiltered_targets,),
@@ -161,6 +198,7 @@ class DistributedGeoData(object):
                 local_nfiltered_targets = particle_scan[-1].get(queue)
 
                 particle_mask = particle_mask.get().astype(bool)
+                self.particle_mask[irank] = particle_mask
                 local_targets = np.empty((tree.dimensions,), dtype=object)
                 for idimension in range(tree.dimensions):
                     local_targets[idimension] = targets[idimension][particle_mask]
@@ -622,9 +660,42 @@ def drive_dfmm(root_wrangler, src_weights, comm=MPI.COMM_WORLD,
     qbx_expansions = qbx_expansions + \
         wrangler.translate_box_local_to_qbx_local(local_exps)
 
-    # qbx_potentials = wrangler.eval_qbx_expansions(qbx_expansions)
+    qbx_potentials = wrangler.eval_qbx_expansions(qbx_expansions)
 
     # }}}
+
+    if current_rank != 0:  # worker process
+        comm.send(non_qbx_potentials, dest=0, tag=MPITags["non_qbx_potentials"])
+        return None
+
+    else:  # master process
+
+        all_potentials_in_tree_order = root_wrangler.full_output_zeros()
+
+        nqbtl = root_wrangler.geo_data.non_qbx_box_target_lists()
+
+        from pytools.obj_array import make_obj_array
+        non_qbx_potentials_all_rank = make_obj_array([
+            np.zeros(nqbtl.nfiltered_targets, root_wrangler.dtype)
+            for k in root_wrangler.outputs]
+        )
+
+        for irank in range(total_rank):
+
+            if irank == 0:
+                non_qbx_potentials_cur_rank = non_qbx_potentials
+            else:
+                non_qbx_potentials_cur_rank = comm.recv(
+                    source=irank, tag=MPITags["non_qbx_potentials"])
+
+            for idim in range(len(root_wrangler.outputs)):
+                non_qbx_potentials_all_rank[idim][
+                    distributed_geo_data.particle_mask[irank]
+                ] = non_qbx_potentials_cur_rank[idim]
+
+        for ap_i, nqp_i in zip(
+                all_potentials_in_tree_order, non_qbx_potentials_all_rank):
+            ap_i[nqbtl.unfiltered_from_filtered_target_indices] = nqp_i
 
     return None
 
