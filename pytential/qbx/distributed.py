@@ -144,13 +144,39 @@ class DistributedGeoData(object):
         else:  # worker process
             traversal = None
 
+        # {{{ Distribute _from_sep_smaller_min_nsources_cumul
+
+        if current_rank == 0:
+            trav_param = {
+                "_from_sep_smaller_min_nsources_cumul":
+                    geo_data.geo_data.lpot_source.
+                    _from_sep_smaller_min_nsources_cumul,
+                "well_sep_is_n_away":
+                    geo_data.geo_data.code_getter.build_traversal.well_sep_is_n_away,
+                "from_sep_smaller_crit":
+                    geo_data.geo_data.code_getter.build_traversal.
+                    from_sep_smaller_crit
+            }
+        else:
+            trav_param = None
+
+        trav_param = comm.bcast(trav_param, root=0)
+
+        # }}}
+
         from boxtree.distributed import generate_local_tree
         self.local_tree, self.local_data, self.box_bounding_box, knls = \
             generate_local_tree(traversal)
 
         from boxtree.distributed import generate_local_travs
         self.trav_local, self.trav_global = generate_local_travs(
-            self.local_tree, self.box_bounding_box, comm=comm)
+            self.local_tree, self.box_bounding_box, comm=comm,
+            well_sep_is_n_away=trav_param["well_sep_is_n_away"],
+            from_sep_smaller_crit=trav_param["from_sep_smaller_crit"],
+            _from_sep_smaller_min_nsources_cumul=trav_param[
+                "_from_sep_smaller_min_nsources_cumul"],
+            merge_close_lists=True
+        )
 
         # {{{ Distribute non_qbx_box_target_lists
 
