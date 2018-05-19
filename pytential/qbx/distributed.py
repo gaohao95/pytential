@@ -52,7 +52,9 @@ class QBXDistributedFMMLibExpansionWrangler(
 
         # {{{ Distribute dipole_vec
 
-        if current_rank == 0:
+        distributed_wrangler.dipole_vec = None
+
+        if current_rank == 0 and wrangler.dipole_vec is not None:
             reqs_dipole_vec = np.empty((total_rank,), dtype=object)
             local_dipole_vec = np.empty((total_rank,), dtype=object)
             for irank in range(total_rank):
