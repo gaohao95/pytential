@@ -41,8 +41,14 @@ class QBXDistributedFMMLibExpansionWrangler(
             distributed_wrangler.geo_data = None
             distributed_wrangler.code = None
             distributed_wrangler.tree = None
-            distributed_wrangler.dipole_vec = None
             distributed_wrangler.__class__ = cls
+
+            # Use bool to represent whether dipole_vec needs to be distributed
+            if wrangler.dipole_vec is not None:
+                distributed_wrangler.dipole_vec = True
+            else:
+                distributed_wrangler.dipole_vec = False
+
         else:  # worker process
             distributed_wrangler = None
 
@@ -52,27 +58,31 @@ class QBXDistributedFMMLibExpansionWrangler(
 
         # {{{ Distribute dipole_vec
 
-        distributed_wrangler.dipole_vec = None
+        if distributed_wrangler.dipole_vec:
 
-        if current_rank == 0 and wrangler.dipole_vec is not None:
-            reqs_dipole_vec = np.empty((total_rank,), dtype=object)
-            local_dipole_vec = np.empty((total_rank,), dtype=object)
-            for irank in range(total_rank):
-                src_mask = distributed_geo_data.local_data[irank]["src_mask"].get()
-                local_dipole_vec[irank] = \
-                    wrangler.dipole_vec[:, src_mask.astype(bool)]
-                reqs_dipole_vec[irank] = comm.isend(
-                    local_dipole_vec[irank],
-                    dest=irank,
-                    tag=MPITags["dipole_vec"]
-                )
+            if current_rank == 0:
+                reqs_dipole_vec = np.empty((total_rank,), dtype=object)
+                local_dipole_vec = np.empty((total_rank,), dtype=object)
+                for irank in range(total_rank):
+                    src_mask = \
+                        distributed_geo_data.local_data[irank]["src_mask"].get()
+                    local_dipole_vec[irank] = \
+                        wrangler.dipole_vec[:, src_mask.astype(bool)]
+                    reqs_dipole_vec[irank] = comm.isend(
+                        local_dipole_vec[irank],
+                        dest=irank,
+                        tag=MPITags["dipole_vec"]
+                    )
 
-            for irank in range(1, total_rank):
-                reqs_dipole_vec[irank].wait()
-            distributed_wrangler.dipole_vec = local_dipole_vec[0]
+                for irank in range(1, total_rank):
+                    reqs_dipole_vec[irank].wait()
+                distributed_wrangler.dipole_vec = local_dipole_vec[0]
+            else:
+                distributed_wrangler.dipole_vec = comm.recv(
+                    source=0, tag=MPITags["dipole_vec"])
+
         else:
-            distributed_wrangler.dipole_vec = comm.recv(
-                source=0, tag=MPITags["dipole_vec"])
+            distributed_wrangler.dipole_vec = None
 
         # }}}
 
