@@ -567,8 +567,18 @@ class DistributedGeoData(object):
 
 def drive_dfmm(root_wrangler, src_weights, comm=MPI.COMM_WORLD,
                _communicate_mpoles_via_allreduce=False):
+
     current_rank = comm.Get_rank()
     total_rank = comm.Get_size()
+
+    if current_rank == 0:
+        flag = True
+    else:
+        flag = None
+    flag = comm.bcast(flag, root=0)
+
+    if not flag:
+        return False
 
     if current_rank == 0:
         distributed_geo_data = DistributedGeoData(root_wrangler.geo_data)
@@ -722,7 +732,7 @@ def drive_dfmm(root_wrangler, src_weights, comm=MPI.COMM_WORLD,
     if current_rank != 0:  # worker process
         comm.send(non_qbx_potentials, dest=0, tag=MPITags["non_qbx_potentials"])
         comm.send(qbx_potentials, dest=0, tag=MPITags["qbx_potentials"])
-        return None
+        return True
 
     else:  # master process
 
