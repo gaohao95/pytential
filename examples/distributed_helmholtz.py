@@ -77,12 +77,11 @@ if current_rank == 0:
             cl_ctx, mesh,
             InterpolatoryQuadratureSimplexGroupFactory(bdry_quad_order))
 
-    from pytential.qbx import QBXLayerPotentialSource
-    qbx, _ = QBXLayerPotentialSource(
-            pre_density_discr, fine_order=bdry_ovsmp_quad_order, qbx_order=qbx_order,
-            fmm_order=fmm_order,
-            fmm_backend="distributed"
-            ).with_refinement()
+    from pytential.qbx.distributed import DistributedQBXLayerPotentialSource
+    qbx, _ = DistributedQBXLayerPotentialSource(
+        comm, pre_density_discr, fine_order=bdry_ovsmp_quad_order,
+        qbx_order=qbx_order, fmm_order=fmm_order
+    ).with_refinement()
     density_discr = qbx.density_discr
 
     # {{{ describe bvp
@@ -144,10 +143,12 @@ if current_rank == 0:
     # }}}
 
 else:
+    from pytential.qbx.distributed import DistributedQBXLayerPotentialSource
+    lp_source = DistributedQBXLayerPotentialSource(comm, None, None)
+
     from pytential.qbx.distributed import drive_dfmm
     while True:
         wrangler = None
         weights = None
-        flag = drive_dfmm(wrangler, weights)
-        if not flag:
-            break
+        distribute_geo_data = lp_source.distibuted_geo_data(None)
+        drive_dfmm(wrangler, weights, distribute_geo_data)

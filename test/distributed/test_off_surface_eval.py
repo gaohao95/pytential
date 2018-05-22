@@ -4,7 +4,7 @@ from meshmode.mesh.generation import (
 import functools
 from sympy.core.cache import clear_cache
 import numpy as np
-from pytential.qbx import QBXLayerPotentialSource
+from pytential.qbx.distributed import DistributedQBXLayerPotentialSource
 from meshmode.discretization import Discretization
 from meshmode.discretization.poly_element import (
     InterpolatoryQuadratureSimplexGroupFactory)
@@ -41,13 +41,12 @@ if current_rank == 0:  # master rank
     pre_density_discr = Discretization(
         ctx, mesh, InterpolatoryQuadratureSimplexGroupFactory(target_order))
 
-    qbx, _ = QBXLayerPotentialSource(
+    qbx, _ = DistributedQBXLayerPotentialSource(
+        comm,
         pre_density_discr,
         fine_order=4 * target_order,
         qbx_order=qbx_order,
-        fmm_order=fmm_order,
-        fmm_backend="distributed"
-        # fmm_backend="fmmlib"
+        fmm_order=fmm_order
     ).with_refinement()
 
     density_discr = qbx.density_discr
@@ -77,7 +76,10 @@ if current_rank == 0:  # master rank
     assert linf_err < 1e-2
 
 else:  # helper rank
+    lp_source = DistributedQBXLayerPotentialSource(comm, None, None)
+    distribute_geo_data = lp_source.distibuted_geo_data(None)
+
     from pytential.qbx.distributed import drive_dfmm
     wrangler = None
     weights = None
-    drive_dfmm(wrangler, weights)
+    drive_dfmm(wrangler, weights, distribute_geo_data, comm=comm)

@@ -1,4 +1,5 @@
 from pytential.qbx.fmmlib import QBXFMMLibExpansionWrangler
+from pytential.qbx import QBXLayerPotentialSource, _not_provided
 from boxtree.distributed import DistributedFMMLibExpansionWrangler, queue
 from boxtree.tree import FilteredTargetListsInTreeOrder
 from mpi4py import MPI
@@ -563,27 +564,177 @@ class DistributedGeoData(object):
 # }}}
 
 
+class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
+
+    def __init__(
+            self,
+            comm,
+            density_discr,
+            fine_order,
+            qbx_order=None,
+            fmm_order=None,
+            fmm_level_to_order=None,
+            to_refined_connection=None,
+            expansion_factory=None,
+            target_association_tolerance=_not_provided,
+
+            # begin undocumented arguments
+            # FIXME default debug=False once everything has matured
+            debug=True,
+            _refined_for_global_qbx=False,
+            _expansions_in_tree_have_extent=True,
+            _expansion_stick_out_factor=0.5,
+            _well_sep_is_n_away=2,
+            _max_leaf_refine_weight=None,
+            _box_extent_norm=None,
+            _from_sep_smaller_crit=None,
+            _from_sep_smaller_min_nsources_cumul=None,
+            _tree_kind="adaptive",
+            geometry_data_inspector=None,
+            target_stick_out_factor=_not_provided):
+
+        self.comm = comm
+        current_rank = self.comm.Get_rank()
+
+        self.distributed_geo_data_cache = {}
+
+        if current_rank == 0:
+            self.next_geo_data_id = 0
+            self.arg_to_id = {}
+
+        if current_rank == 0:
+
+            super(DistributedQBXLayerPotentialSource, self).__init__(
+                density_discr,
+                fine_order,
+                qbx_order=qbx_order,
+                fmm_order=fmm_order,
+                fmm_level_to_order=fmm_level_to_order,
+                to_refined_connection=to_refined_connection,
+                expansion_factory=expansion_factory,
+                target_association_tolerance=target_association_tolerance,
+                debug=debug,
+                _refined_for_global_qbx=_refined_for_global_qbx,
+                _expansions_in_tree_have_extent=_expansions_in_tree_have_extent,
+                _expansion_stick_out_factor=_expansion_stick_out_factor,
+                _well_sep_is_n_away=_well_sep_is_n_away,
+                _max_leaf_refine_weight=_max_leaf_refine_weight,
+                _box_extent_norm=_box_extent_norm,
+                _from_sep_smaller_crit=_from_sep_smaller_crit,
+                _from_sep_smaller_min_nsources_cumul=(
+                    _from_sep_smaller_min_nsources_cumul),
+                _tree_kind=_tree_kind,
+                geometry_data_inspector=geometry_data_inspector,
+                fmm_backend='distributed',
+                target_stick_out_factor=target_stick_out_factor
+            )
+
+    def copy(
+            self,
+            density_discr=None,
+            fine_order=None,
+            qbx_order=None,
+            fmm_order=_not_provided,
+            fmm_level_to_order=_not_provided,
+            to_refined_connection=None,
+            target_association_tolerance=_not_provided,
+            _expansions_in_tree_have_extent=_not_provided,
+            _expansion_stick_out_factor=_not_provided,
+            _max_leaf_refine_weight=None,
+            _box_extent_norm=None,
+            _from_sep_smaller_crit=None,
+            _tree_kind=None,
+            geometry_data_inspector=None,
+            fmm_backend=None,
+
+            debug=_not_provided,
+            _refined_for_global_qbx=_not_provided,
+            target_stick_out_factor=_not_provided,
+    ):
+
+        obj = super(DistributedQBXLayerPotentialSource, self).copy(
+            density_discr=density_discr,
+            fine_order=fine_order,
+            qbx_order=qbx_order,
+            fmm_order=fmm_order,
+            fmm_level_to_order=fmm_level_to_order,
+            to_refined_connection=to_refined_connection,
+            target_association_tolerance=target_association_tolerance,
+            _expansions_in_tree_have_extent=_expansions_in_tree_have_extent,
+            _expansion_stick_out_factor=_expansion_stick_out_factor,
+            _max_leaf_refine_weight=_max_leaf_refine_weight,
+            _box_extent_norm=_box_extent_norm,
+            _from_sep_smaller_crit=_from_sep_smaller_crit,
+            _tree_kind=_tree_kind,
+            geometry_data_inspector=geometry_data_inspector,
+            fmm_backend=fmm_backend,
+
+            debug=debug,
+            _refined_for_global_qbx=_refined_for_global_qbx,
+            target_stick_out_factor=target_stick_out_factor,
+        )
+
+        obj.__class__ = DistributedQBXLayerPotentialSource
+        obj.comm = self.comm
+        obj.distributed_geo_data_cache = self.distributed_geo_data_cache
+
+        current_rank = self.comm.Get_rank()
+
+        if current_rank == 0:
+            obj.next_geo_data_id = self.next_geo_data_id
+            obj.arg_to_id = self.arg_to_id
+
+        return obj
+
+    def distibuted_geo_data(self, geo_data):
+        """ Note: This method needs to be called collectively by all processes of
+        self.comm
+        """
+        current_rank = self.comm.Get_rank()
+
+        if current_rank == 0:
+
+            target_discrs_and_qbx_sides = geo_data.target_discrs_and_qbx_sides
+
+            if target_discrs_and_qbx_sides in self.arg_to_id:
+                geo_data_id = self.arg_to_id[target_discrs_and_qbx_sides]
+            else:
+                geo_data_id = self.next_geo_data_id
+                self.arg_to_id[target_discrs_and_qbx_sides] = geo_data_id
+                self.next_geo_data_id += 1
+        else:
+            geo_data_id = None
+
+        geo_data_id = self.comm.bcast(geo_data_id, root=0)
+
+        if geo_data_id in self.distributed_geo_data_cache:
+            return self.distributed_geo_data_cache[geo_data_id]
+
+        # no cached result found, construct a new distributed_geo_data
+        if current_rank == 0:
+
+            with cl.CommandQueue(geo_data.cl_context) as queue:
+                from pytential.qbx.fmmlib import ToHostTransferredGeoDataWrapper
+                host_geo_data = ToHostTransferredGeoDataWrapper(queue, geo_data)
+
+                distributed_geo_data = DistributedGeoData(host_geo_data, self.comm)
+
+        else:
+            distributed_geo_data = DistributedGeoData(None, self.comm)
+
+        self.distributed_geo_data_cache[geo_data_id] = distributed_geo_data
+
+        return distributed_geo_data
+
+
 # {{{ FMM Driver
 
-def drive_dfmm(root_wrangler, src_weights, comm=MPI.COMM_WORLD,
+def drive_dfmm(root_wrangler, src_weights, distributed_geo_data,
+               comm=MPI.COMM_WORLD,
                _communicate_mpoles_via_allreduce=False):
 
     current_rank = comm.Get_rank()
     total_rank = comm.Get_size()
-
-    if current_rank == 0:
-        flag = True
-    else:
-        flag = None
-    flag = comm.bcast(flag, root=0)
-
-    if not flag:
-        return False
-
-    if current_rank == 0:
-        distributed_geo_data = DistributedGeoData(root_wrangler.geo_data)
-    else:
-        distributed_geo_data = DistributedGeoData(None)
 
     distributed_wrangler = QBXDistributedFMMLibExpansionWrangler.distribute(
         root_wrangler, distributed_geo_data)
@@ -732,7 +883,6 @@ def drive_dfmm(root_wrangler, src_weights, comm=MPI.COMM_WORLD,
     if current_rank != 0:  # worker process
         comm.send(non_qbx_potentials, dest=0, tag=MPITags["non_qbx_potentials"])
         comm.send(qbx_potentials, dest=0, tag=MPITags["qbx_potentials"])
-        return True
 
     else:  # master process
 
