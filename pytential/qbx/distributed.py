@@ -157,13 +157,10 @@ class DistributedGeoData(object):
         else:  # worker process
             traversal = None
 
-        # {{{ Distribute _from_sep_smaller_min_nsources_cumul
+        # {{{ Distribute traversal parameters
 
         if current_rank == 0:
             trav_param = {
-                "_from_sep_smaller_min_nsources_cumul":
-                    geo_data.geo_data.lpot_source.
-                    _from_sep_smaller_min_nsources_cumul,
                 "well_sep_is_n_away":
                     geo_data.geo_data.code_getter.build_traversal.well_sep_is_n_away,
                 "from_sep_smaller_crit":
@@ -186,8 +183,6 @@ class DistributedGeoData(object):
             self.local_tree, self.box_bounding_box, comm=comm,
             well_sep_is_n_away=trav_param["well_sep_is_n_away"],
             from_sep_smaller_crit=trav_param["from_sep_smaller_crit"],
-            _from_sep_smaller_min_nsources_cumul=trav_param[
-                "_from_sep_smaller_min_nsources_cumul"],
             merge_close_lists=True
         )
 
@@ -588,7 +583,6 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
             _max_leaf_refine_weight=None,
             _box_extent_norm=None,
             _from_sep_smaller_crit=None,
-            _from_sep_smaller_min_nsources_cumul=None,
             _tree_kind="adaptive",
             geometry_data_inspector=None,
             target_stick_out_factor=_not_provided):
@@ -621,8 +615,7 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
                 _max_leaf_refine_weight=_max_leaf_refine_weight,
                 _box_extent_norm=_box_extent_norm,
                 _from_sep_smaller_crit=_from_sep_smaller_crit,
-                _from_sep_smaller_min_nsources_cumul=(
-                    _from_sep_smaller_min_nsources_cumul),
+                _from_sep_smaller_min_nsources_cumul=None,
                 _tree_kind=_tree_kind,
                 geometry_data_inspector=geometry_data_inspector,
                 fmm_backend='distributed',
