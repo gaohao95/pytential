@@ -4,8 +4,11 @@ from boxtree.distributed import DistributedFMMLibExpansionWrangler, queue
 from boxtree.tree import FilteredTargetListsInTreeOrder
 from mpi4py import MPI
 import numpy as np
-
 import pyopencl as cl
+import logging
+import time
+
+logger = logging.getLogger(__name__)
 
 # {{{ MPITags used in this module
 
@@ -127,7 +130,7 @@ class QBXDistributedFMMLibExpansionWrangler(
 # }}}
 
 
-# {{{
+# {{{ Distributed GeoData
 
 class DistributedGeoData(object):
     def __init__(self, geo_data, comm=MPI.COMM_WORLD):
@@ -153,6 +156,8 @@ class DistributedGeoData(object):
             for level in range(nlevels):
                 qbx_center_to_target_box_source_level[level] = (
                     geo_data.qbx_center_to_target_box_source_level(level))
+
+            start_time = time.time()
 
         else:  # worker process
             traversal = None
@@ -448,6 +453,9 @@ class DistributedGeoData(object):
                 reqs_qbx_targets[irank].wait()
             local_qbx_targets = local_qbx_targets[0]
 
+            logger.info("Distribute geometry data in {} secs.".format(
+                time.time() - start_time))
+
         else:
             local_centers = comm.recv(
                 source=0, tag=MPITags["centers"])
@@ -729,6 +737,9 @@ def drive_dfmm(root_wrangler, src_weights, distributed_geo_data,
     current_rank = comm.Get_rank()
     total_rank = comm.Get_size()
 
+    if current_rank == 0:
+        start_time = time.time()
+
     distributed_wrangler = QBXDistributedFMMLibExpansionWrangler.distribute(
         root_wrangler, distributed_geo_data)
     wrangler = distributed_wrangler
@@ -929,6 +940,9 @@ def drive_dfmm(root_wrangler, src_weights, distributed_geo_data,
         from pytools.obj_array import with_object_array_or_scalar
         result = with_object_array_or_scalar(
             reorder_and_finalize_potentials, all_potentials_in_tree_order)
+
+        logger.info("Distributed FMM evaluation finished in {} secs.".format(
+            time.time() - start_time))
 
         return result
 

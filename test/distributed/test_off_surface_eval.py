@@ -14,6 +14,13 @@ from sumpy.visualization import FieldPlotter
 from pytential.target import PointsTarget
 import matplotlib.pyplot as pt
 from mpi4py import MPI
+import logging
+import os
+
+# Set up logging infrastructure
+logging.basicConfig(level=os.environ.get("LOGLEVEL", "WARNING"))
+logging.getLogger("boxtree.distributed").setLevel(logging.INFO)
+logging.getLogger("pytential.qbx.distributed").setLevel(logging.INFO)
 
 # Get MPI information
 comm = MPI.COMM_WORLD
