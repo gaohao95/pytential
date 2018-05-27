@@ -184,7 +184,7 @@ class DistributedGeoData(object):
             generate_local_tree(traversal)
 
         from boxtree.distributed import generate_local_travs
-        self.trav_local, self.trav_global = generate_local_travs(
+        self.local_trav = generate_local_travs(
             self.local_tree, self.box_bounding_box, comm=comm,
             well_sep_is_n_away=trav_param["well_sep_is_n_away"],
             from_sep_smaller_crit=trav_param["from_sep_smaller_crit"],
@@ -483,8 +483,8 @@ class DistributedGeoData(object):
             (self.local_tree.nboxes,), dtype=self.local_tree.particle_id_dtype)
         # make sure accessing invalid position raises an error
         global_boxes_to_target_boxes *= -1
-        global_boxes_to_target_boxes[self.trav_global.target_boxes] = \
-            np.arange(self.trav_global.target_boxes.shape[0])
+        global_boxes_to_target_boxes[self.local_trav.target_boxes] = \
+            np.arange(self.local_trav.target_boxes.shape[0])
         self._local_qbx_center_to_target_box = \
             global_boxes_to_target_boxes[local_qbx_center_to_target_box]
 
@@ -534,7 +534,7 @@ class DistributedGeoData(object):
         return self._non_qbx_box_target_lists
 
     def traversal(self):
-        return self.trav_global
+        return self.local_trav
 
     def tree(self):
         return self.traversal().tree
@@ -744,8 +744,7 @@ def drive_dfmm(root_wrangler, src_weights, distributed_geo_data,
         root_wrangler, distributed_geo_data)
     wrangler = distributed_wrangler
 
-    local_traversal = distributed_geo_data.trav_local
-    global_traversal = distributed_geo_data.trav_global
+    local_traversal = distributed_geo_data.local_trav
 
     # {{{ Distribute source weights
 
@@ -795,9 +794,9 @@ def drive_dfmm(root_wrangler, src_weights, distributed_geo_data,
     # {{{ direct evaluation from neighbor source boxes ("list 1")
 
     non_qbx_potentials = wrangler.eval_direct(
-        global_traversal.target_boxes,
-        global_traversal.neighbor_source_boxes_starts,
-        global_traversal.neighbor_source_boxes_lists,
+        local_traversal.target_boxes,
+        local_traversal.neighbor_source_boxes_starts,
+        local_traversal.neighbor_source_boxes_lists,
         local_source_weights)
 
     # }}}
@@ -805,10 +804,10 @@ def drive_dfmm(root_wrangler, src_weights, distributed_geo_data,
     # {{{ translate separated siblings' ("list 2") mpoles to local
 
     local_exps = wrangler.multipole_to_local(
-        global_traversal.level_start_target_or_target_parent_box_nrs,
-        global_traversal.target_or_target_parent_boxes,
-        global_traversal.from_sep_siblings_starts,
-        global_traversal.from_sep_siblings_lists,
+        local_traversal.level_start_target_or_target_parent_box_nrs,
+        local_traversal.target_or_target_parent_boxes,
+        local_traversal.from_sep_siblings_starts,
+        local_traversal.from_sep_siblings_lists,
         mpole_exps)
 
     # }}}
@@ -819,17 +818,17 @@ def drive_dfmm(root_wrangler, src_weights, distributed_geo_data,
     # contribution *out* of the downward-propagating local expansions)
 
     non_qbx_potentials = non_qbx_potentials + wrangler.eval_multipoles(
-        global_traversal.target_boxes_sep_smaller_by_source_level,
-        global_traversal.from_sep_smaller_by_level,
+        local_traversal.target_boxes_sep_smaller_by_source_level,
+        local_traversal.from_sep_smaller_by_level,
         mpole_exps)
 
     # assert that list 3 close has been merged into list 1
     # assert global_traversal.from_sep_close_smaller_starts is None
-    if global_traversal.from_sep_close_smaller_starts is not None:
+    if local_traversal.from_sep_close_smaller_starts is not None:
         non_qbx_potentials = non_qbx_potentials + wrangler.eval_direct(
-            global_traversal.target_boxes,
-            global_traversal.from_sep_close_smaller_starts,
-            global_traversal.from_sep_close_smaller_lists,
+            local_traversal.target_boxes,
+            local_traversal.from_sep_close_smaller_starts,
+            local_traversal.from_sep_close_smaller_lists,
             local_source_weights)
 
     # }}}
@@ -837,17 +836,17 @@ def drive_dfmm(root_wrangler, src_weights, distributed_geo_data,
     # {{{ form locals for separated bigger source boxes ("list 4")
 
     local_exps = local_exps + wrangler.form_locals(
-        global_traversal.level_start_target_or_target_parent_box_nrs,
-        global_traversal.target_or_target_parent_boxes,
-        global_traversal.from_sep_bigger_starts,
-        global_traversal.from_sep_bigger_lists,
+        local_traversal.level_start_target_or_target_parent_box_nrs,
+        local_traversal.target_or_target_parent_boxes,
+        local_traversal.from_sep_bigger_starts,
+        local_traversal.from_sep_bigger_lists,
         local_source_weights)
 
-    if global_traversal.from_sep_close_bigger_starts is not None:
+    if local_traversal.from_sep_close_bigger_starts is not None:
         non_qbx_potentials = non_qbx_potentials + wrangler.eval_direct(
-            global_traversal.target_or_target_parent_boxes,
-            global_traversal.from_sep_close_bigger_starts,
-            global_traversal.from_sep_close_bigger_lists,
+            local_traversal.target_or_target_parent_boxes,
+            local_traversal.from_sep_close_bigger_starts,
+            local_traversal.from_sep_close_bigger_lists,
             local_source_weights)
 
     # }}}
@@ -855,8 +854,8 @@ def drive_dfmm(root_wrangler, src_weights, distributed_geo_data,
     # {{{ propagate local_exps downward
 
     wrangler.refine_locals(
-        global_traversal.level_start_target_or_target_parent_box_nrs,
-        global_traversal.target_or_target_parent_boxes,
+        local_traversal.level_start_target_or_target_parent_box_nrs,
+        local_traversal.target_or_target_parent_boxes,
         local_exps)
 
     # }}}
@@ -864,8 +863,8 @@ def drive_dfmm(root_wrangler, src_weights, distributed_geo_data,
     # {{{ evaluate locals
 
     non_qbx_potentials = non_qbx_potentials + wrangler.eval_locals(
-        global_traversal.level_start_target_box_nrs,
-        global_traversal.target_boxes,
+        local_traversal.level_start_target_box_nrs,
+        local_traversal.target_boxes,
         local_exps)
 
     # }}}
