@@ -2,9 +2,11 @@ from pytential.qbx.fmmlib import QBXFMMLibExpansionWrangler
 from pytential.qbx import QBXLayerPotentialSource, _not_provided
 from boxtree.distributed import DistributedFMMLibExpansionWrangler, queue
 from boxtree.tree import FilteredTargetListsInTreeOrder
+from boxtree.partition import ResponsibleBoxesQuery
 from mpi4py import MPI
 import numpy as np
 import pyopencl as cl
+from pyopencl.algorithm import ListOfListsBuilder
 import logging
 import time
 
@@ -130,6 +132,124 @@ class QBXDistributedFMMLibExpansionWrangler(
 # }}}
 
 
+class QBXResponsibleBoxQuery(ResponsibleBoxesQuery):
+
+    def __init__(self, queue, traversal, global_geo_data):
+        super(QBXResponsibleBoxQuery, self).__init__(queue, traversal)
+
+        with cl.CommandQueue(global_geo_data.cl_context) as geo_data_queue:
+            self.user_target_to_center = \
+                global_geo_data.user_target_to_center().get(queue=geo_data_queue)
+            self.qbx_center_to_target_box = \
+                global_geo_data.qbx_center_to_target_box().get(queue=geo_data_queue)
+
+        self.box_target_starts_dev = cl.array.to_device(
+            queue, traversal.tree.box_target_starts)
+
+        self.box_target_counts_nonchild_dev = cl.array.to_device(
+            queue, traversal.tree.box_target_counts_nonchild)
+
+        # helper kernel for constructing a list of particles in given boxes
+        from mako.template import Template
+        from pyopencl.tools import dtype_to_ctype
+
+        self.box_to_target_knl = ListOfListsBuilder(
+            queue.context,
+            [("particle_list", self.tree.particle_id_dtype)],
+            Template("""
+            void generate(LIST_ARG_DECL USER_ARG_DECL index_type i)
+            {
+                typedef ${particle_id_t} particle_id_t;
+                typedef ${box_id_t} box_id_t;
+
+                box_id_t ibox = box_list[i];
+                particle_id_t start = box_particle_start[ibox];
+                particle_id_t end = start + box_particle_counts_nonchild[ibox];
+
+                for(particle_id_t iparticle = start; iparticle < end; iparticle++)
+                {
+                    APPEND_particle_list(iparticle);
+                }
+            }
+            """).render(
+                particle_id_t=dtype_to_ctype(self.tree.particle_id_dtype),
+                box_id_t=dtype_to_ctype(self.tree.box_id_dtype)
+            ),
+            arg_decls=Template("""
+                ${particle_id_t} *box_particle_start,
+                ${particle_id_t} *box_particle_counts_nonchild,
+                ${box_id_t} *box_list
+            """).render(
+                particle_id_t=dtype_to_ctype(self.tree.particle_id_dtype),
+                box_id_t=dtype_to_ctype(self.tree.box_id_dtype)
+            )
+        )
+
+    def center_boxes_mask(self, responsible_boxes_list):
+        lists, _ = self.box_to_target_knl(
+            self.queue,
+            responsible_boxes_list.shape[0],
+            self.box_target_starts_dev.data,
+            self.box_target_counts_nonchild_dev.data,
+            cl.array.to_device(self.queue, responsible_boxes_list).data
+        )
+
+        targets_list = lists["particle_list"]
+        targets_list = targets_list.lists.get()
+
+        tree_order_to_user_order = np.ones(
+            (self.tree.ntargets,), dtype=self.tree.particle_id_dtype) * -1
+        tree_order_to_user_order[self.tree.sorted_target_ids] = np.arange(
+            self.tree.ntargets)
+
+        targets_list = tree_order_to_user_order[targets_list]
+
+        centers = self.user_target_to_center[targets_list]
+
+        from pytential.qbx.geometry import target_state
+        centers = centers[centers != target_state.NO_QBX_NEEDED]
+
+        center_target_boxes = self.qbx_center_to_target_box[centers]
+
+        global_center_boxes = self.traversal.target_boxes[center_target_boxes]
+
+        center_boxes_mask = np.zeros((self.tree.nboxes,), dtype=np.int8)
+        center_boxes_mask[global_center_boxes] = 1
+
+        center_boxes_mask = cl.array.to_device(queue, center_boxes_mask)
+
+        return center_boxes_mask
+
+    def get_boxes_mask(self, responsible_boxes_list):
+        responsible_boxes_mask = np.zeros((self.tree.nboxes,), dtype=np.int8)
+        responsible_boxes_mask[responsible_boxes_list] = 1
+        responsible_boxes_mask = cl.array.to_device(
+            self.queue, responsible_boxes_mask)
+
+        ancestor_boxes_mask = self.ancestor_boxes_mask(responsible_boxes_mask)
+
+        centers_boxes_mask = self.center_boxes_mask(responsible_boxes_list)
+
+        responsible_and_centers_boxes_mask = (
+            responsible_boxes_mask | centers_boxes_mask)
+
+        ancestor_responsible_and_centers_boxes_mask = self.ancestor_boxes_mask(
+            responsible_and_centers_boxes_mask)
+
+        src_boxes_mask = self.src_boxes_mask(
+            responsible_and_centers_boxes_mask,
+            ancestor_responsible_and_centers_boxes_mask
+        )
+
+        multipole_boxes_mask = self.multipole_boxes_mask(
+            responsible_and_centers_boxes_mask,
+            ancestor_responsible_and_centers_boxes_mask,
+        )
+
+        return (responsible_boxes_mask, ancestor_boxes_mask, src_boxes_mask,
+                multipole_boxes_mask)
+
+
 # {{{ Distributed GeoData
 
 class DistributedGeoData(object):
@@ -179,9 +299,28 @@ class DistributedGeoData(object):
 
         # }}}
 
+        if current_rank == 0:
+            from boxtree.partition import partition_work
+            from boxtree.distributed import WorkloadWeight
+            workload_weight = WorkloadWeight(
+                direct=1, m2l=1, m2p=1, p2l=1, multipole=5
+            )
+            responsible_boxes_list = partition_work(
+                traversal, comm.Get_size(), workload_weight
+            )
+        else:
+            responsible_boxes_list = None
+
+        if current_rank == 0:
+            responsible_box_query = QBXResponsibleBoxQuery(
+                queue, traversal, geo_data.geo_data)
+        else:
+            responsible_box_query = None
+
         from boxtree.distributed import generate_local_tree
         self.local_tree, self.local_data, self.box_bounding_box, knls = \
-            generate_local_tree(traversal)
+            generate_local_tree(traversal, responsible_boxes_list,
+                                responsible_box_query)
 
         from boxtree.distributed import generate_local_travs
         self.local_trav = generate_local_travs(
@@ -623,7 +762,7 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
                 _max_leaf_refine_weight=_max_leaf_refine_weight,
                 _box_extent_norm=_box_extent_norm,
                 _from_sep_smaller_crit=_from_sep_smaller_crit,
-                _from_sep_smaller_min_nsources_cumul=None,
+                _from_sep_smaller_min_nsources_cumul=0,
                 _tree_kind=_tree_kind,
                 geometry_data_inspector=geometry_data_inspector,
                 fmm_backend='distributed',
