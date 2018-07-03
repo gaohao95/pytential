@@ -728,11 +728,11 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
         # {{{ execute global QBX
 
         if self.fmm_backend == 'distributed':
-            distributed_geo_data = self.distibuted_geo_data(geo_data)
+            distributed_geo_data = self.distibuted_geo_data(geo_data, queue)
 
             from pytential.qbx.distributed import drive_dfmm
             all_potentials_on_every_tgt = drive_dfmm(
-                wrangler, strengths, distributed_geo_data, comm=self.comm)
+                queue, wrangler, strengths, distributed_geo_data, comm=self.comm)
         else:
             from pytential.qbx.fmm import drive_fmm
             all_potentials_on_every_tgt = drive_fmm(wrangler, strengths)

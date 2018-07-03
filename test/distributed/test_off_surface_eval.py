@@ -84,9 +84,9 @@ if current_rank == 0:  # master rank
 
 else:  # helper rank
     lp_source = DistributedQBXLayerPotentialSource(comm, None, None)
-    distribute_geo_data = lp_source.distibuted_geo_data(None)
+    distribute_geo_data = lp_source.distibuted_geo_data(None, queue)
 
     from pytential.qbx.distributed import drive_dfmm
     wrangler = None
     weights = None
-    drive_dfmm(wrangler, weights, distribute_geo_data, comm=comm)
+    drive_dfmm(queue, wrangler, weights, distribute_geo_data, comm=comm)

@@ -1,8 +1,8 @@
 from pytential.qbx.fmmlib import QBXFMMLibExpansionWrangler
 from pytential.qbx import QBXLayerPotentialSource, _not_provided
-from boxtree.distributed import DistributedFMMLibExpansionWrangler, queue
+from boxtree.distributed.calculation import DistributedFMMLibExpansionWrangler
 from boxtree.tree import FilteredTargetListsInTreeOrder
-from boxtree.partition import ResponsibleBoxesQuery
+from boxtree.distributed.partition import ResponsibleBoxesQuery
 from mpi4py import MPI
 import numpy as np
 import pyopencl as cl
@@ -36,7 +36,7 @@ class QBXDistributedFMMLibExpansionWrangler(
         QBXFMMLibExpansionWrangler, DistributedFMMLibExpansionWrangler):
 
     @classmethod
-    def distribute(cls, wrangler, distributed_geo_data, comm=MPI.COMM_WORLD):
+    def distribute(cls, queue, wrangler, distributed_geo_data, comm=MPI.COMM_WORLD):
         current_rank = comm.Get_rank()
         total_rank = comm.Get_size()
 
@@ -91,6 +91,8 @@ class QBXDistributedFMMLibExpansionWrangler(
             distributed_wrangler.dipole_vec = None
 
         # }}}
+
+        distributed_wrangler.queue = queue
 
         return distributed_wrangler
 
@@ -216,7 +218,7 @@ class QBXResponsibleBoxQuery(ResponsibleBoxesQuery):
         center_boxes_mask = np.zeros((self.tree.nboxes,), dtype=np.int8)
         center_boxes_mask[global_center_boxes] = 1
 
-        center_boxes_mask = cl.array.to_device(queue, center_boxes_mask)
+        center_boxes_mask = cl.array.to_device(self.queue, center_boxes_mask)
 
         return center_boxes_mask
 
@@ -253,7 +255,7 @@ class QBXResponsibleBoxQuery(ResponsibleBoxesQuery):
 # {{{ Distributed GeoData
 
 class DistributedGeoData(object):
-    def __init__(self, geo_data, comm=MPI.COMM_WORLD):
+    def __init__(self, geo_data, queue, comm=MPI.COMM_WORLD):
         self.comm = comm
         current_rank = comm.Get_rank()
         total_rank = comm.Get_size()
@@ -300,7 +302,7 @@ class DistributedGeoData(object):
         # }}}
 
         if current_rank == 0:
-            from boxtree.partition import partition_work
+            from boxtree.distributed.partition import partition_work
             from boxtree.distributed import WorkloadWeight
             workload_weight = WorkloadWeight(
                 direct=1, m2l=1, m2p=1, p2l=1, multipole=5
@@ -317,14 +319,14 @@ class DistributedGeoData(object):
         else:
             responsible_box_query = None
 
-        from boxtree.distributed import generate_local_tree
-        self.local_tree, self.local_data, self.box_bounding_box, knls = \
-            generate_local_tree(traversal, responsible_boxes_list,
+        from boxtree.distributed.local_tree import generate_local_tree
+        self.local_tree, self.local_data, self.box_bounding_box = \
+            generate_local_tree(queue, traversal, responsible_boxes_list,
                                 responsible_box_query)
 
-        from boxtree.distributed import generate_local_travs
+        from boxtree.distributed.local_traversal import generate_local_travs
         self.local_trav = generate_local_travs(
-            self.local_tree, self.box_bounding_box, comm=comm,
+            queue, self.local_tree, self.box_bounding_box,
             well_sep_is_n_away=trav_param["well_sep_is_n_away"],
             from_sep_smaller_crit=trav_param["from_sep_smaller_crit"],
             merge_close_lists=True
@@ -333,6 +335,9 @@ class DistributedGeoData(object):
         # {{{ Distribute non_qbx_box_target_lists
 
         if current_rank == 0:  # master process
+            from boxtree.distributed.local_tree import get_fetch_local_particles_knls
+            knls = get_fetch_local_particles_knls(queue.context, tree)
+
             box_target_starts = cl.array.to_device(
                 queue, non_qbx_box_target_lists.box_target_starts)
             box_target_counts_nonchild = cl.array.to_device(
@@ -347,7 +352,7 @@ class DistributedGeoData(object):
             for irank in range(total_rank):
                 particle_mask = cl.array.zeros(queue, (nfiltered_targets,),
                                                dtype=tree.particle_id_dtype)
-                knls["particle_mask_knl"](
+                knls.particle_mask_knl(
                     self.local_data[irank]["tgt_box_mask"],
                     box_target_starts,
                     box_target_counts_nonchild,
@@ -357,18 +362,18 @@ class DistributedGeoData(object):
                 particle_scan = cl.array.empty(queue, (nfiltered_targets + 1,),
                                                dtype=tree.particle_id_dtype)
                 particle_scan[0] = 0
-                knls["mask_scan_knl"](particle_mask, particle_scan)
+                knls.mask_scan_knl(particle_mask, particle_scan)
 
                 local_box_target_starts = cl.array.empty(
                     queue, (tree.nboxes,), dtype=tree.particle_id_dtype)
-                knls["generate_box_particle_starts"](
+                knls.generate_box_particle_starts(
                     box_target_starts, particle_scan,
                     local_box_target_starts
                 )
 
                 local_box_target_counts_nonchild = cl.array.zeros(
                     queue, (tree.nboxes,), dtype=tree.particle_id_dtype)
-                knls["generate_box_particle_counts_nonchild"](
+                knls.generate_box_particle_counts_nonchild(
                     self.local_data[irank]["tgt_box_mask"],
                     box_target_counts_nonchild,
                     local_box_target_counts_nonchild
@@ -826,7 +831,7 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
 
         return obj
 
-    def distibuted_geo_data(self, geo_data):
+    def distibuted_geo_data(self, geo_data, queue):
         """ Note: This method needs to be called collectively by all processes of
         self.comm
         """
@@ -852,15 +857,14 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
 
         # no cached result found, construct a new distributed_geo_data
         if current_rank == 0:
+            from pytential.qbx.fmmlib import ToHostTransferredGeoDataWrapper
+            host_geo_data = ToHostTransferredGeoDataWrapper(queue, geo_data)
 
-            with cl.CommandQueue(geo_data.cl_context) as queue:
-                from pytential.qbx.fmmlib import ToHostTransferredGeoDataWrapper
-                host_geo_data = ToHostTransferredGeoDataWrapper(queue, geo_data)
-
-                distributed_geo_data = DistributedGeoData(host_geo_data, self.comm)
+            distributed_geo_data = DistributedGeoData(host_geo_data, queue,
+                                                      self.comm)
 
         else:
-            distributed_geo_data = DistributedGeoData(None, self.comm)
+            distributed_geo_data = DistributedGeoData(None, queue, self.comm)
 
         self.distributed_geo_data_cache[geo_data_id] = distributed_geo_data
 
@@ -869,7 +873,7 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
 
 # {{{ FMM Driver
 
-def drive_dfmm(root_wrangler, src_weights, distributed_geo_data,
+def drive_dfmm(queue, root_wrangler, src_weights, distributed_geo_data,
                comm=MPI.COMM_WORLD,
                _communicate_mpoles_via_allreduce=False):
 
@@ -880,7 +884,7 @@ def drive_dfmm(root_wrangler, src_weights, distributed_geo_data,
         start_time = time.time()
 
     distributed_wrangler = QBXDistributedFMMLibExpansionWrangler.distribute(
-        root_wrangler, distributed_geo_data)
+        queue, root_wrangler, distributed_geo_data)
     wrangler = distributed_wrangler
 
     local_traversal = distributed_geo_data.local_trav
@@ -893,9 +897,15 @@ def drive_dfmm(root_wrangler, src_weights, distributed_geo_data,
     else:
         global_tree = None
 
-    from boxtree.distributed import distribute_source_weights
+    from boxtree.distributed.calculation import distribute_source_weights
+
+    if current_rank == 0:
+        queue = cl.CommandQueue(root_wrangler.geo_data.geo_data.cl_context)
+    else:
+        queue = None
+
     local_source_weights = distribute_source_weights(
-        src_weights, global_tree, distributed_geo_data.local_data, comm=comm)
+        queue, src_weights, global_tree, distributed_geo_data.local_data, comm=comm)
 
     # }}}
 
@@ -919,7 +929,7 @@ def drive_dfmm(root_wrangler, src_weights, distributed_geo_data,
 
     # {{{ Communicate mpoles
 
-    from boxtree.distributed import communicate_mpoles
+    from boxtree.distributed.calculation import communicate_mpoles
 
     if _communicate_mpoles_via_allreduce:
         mpole_exps_all = np.zeros_like(mpole_exps)

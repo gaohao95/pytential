@@ -15,6 +15,10 @@ total_rank = comm.Get_size()
 # prevent cache 'splosion
 clear_cache()
 
+# Setup PyOpenCL
+ctx = cl.create_some_context()
+queue = cl.CommandQueue(ctx)
+
 if current_rank == 0:
 
     class GreenExpr(object):
@@ -53,9 +57,6 @@ if current_rank == 0:
 
         def get_mesh(self, resolution, tgt_order):
             return get_sphere_mesh(resolution, tgt_order)
-
-    ctx = cl.create_some_context()
-    queue = cl.CommandQueue(ctx)
 
     expr = GreenExpr()
     geometry = SphereGeometry()
@@ -167,9 +168,9 @@ if current_rank == 0:
 else:
     while True:
         lp_source = DistributedQBXLayerPotentialSource(comm, None, None)
-        distribute_geo_data = lp_source.distibuted_geo_data(None)
+        distribute_geo_data = lp_source.distibuted_geo_data(None, queue)
 
         from pytential.qbx.distributed import drive_dfmm
         wrangler = None
         weights = None
-        drive_dfmm(wrangler, weights, distribute_geo_data, comm=comm)
+        drive_dfmm(queue, wrangler, weights, distribute_geo_data, comm=comm)
