@@ -67,21 +67,26 @@ class QBXDistributedFMMLibExpansionWrangler(
         if distributed_wrangler.dipole_vec:
 
             if current_rank == 0:
-                reqs_dipole_vec = np.empty((total_rank,), dtype=object)
+                reqs_dipole_vec = []
                 local_dipole_vec = np.empty((total_rank,), dtype=object)
-                for irank in range(total_rank):
-                    src_mask = \
-                        distributed_geo_data.local_data[irank]["src_mask"].get()
-                    local_dipole_vec[irank] = \
-                        wrangler.dipole_vec[:, src_mask.astype(bool)]
-                    reqs_dipole_vec[irank] = comm.isend(
-                        local_dipole_vec[irank],
-                        dest=irank,
-                        tag=MPITags["dipole_vec"]
-                    )
 
-                for irank in range(1, total_rank):
-                    reqs_dipole_vec[irank].wait()
+                for irank in range(total_rank):
+
+                    src_idx = distributed_geo_data.local_data[irank].src_idx
+
+                    local_dipole_vec[irank] = wrangler.dipole_vec[:, src_idx]
+
+                    if irank != 0:
+                        reqs_dipole_vec.append(
+                            comm.isend(
+                                local_dipole_vec[irank],
+                                dest=irank,
+                                tag=MPITags["dipole_vec"]
+                            )
+                        )
+
+                MPI.Request.Waitall(reqs_dipole_vec)
+
                 distributed_wrangler.dipole_vec = local_dipole_vec[0]
             else:
                 distributed_wrangler.dipole_vec = comm.recv(
@@ -352,8 +357,15 @@ class DistributedGeoData(object):
             for irank in range(total_rank):
                 particle_mask = cl.array.zeros(queue, (nfiltered_targets,),
                                                dtype=tree.particle_id_dtype)
+
+                responsible_boxes_mask = np.zeros((tree.nboxes,), dtype=np.int8)
+                responsible_boxes_mask[responsible_boxes_list[irank]] = 1
+                responsible_boxes_mask = cl.array.to_device(
+                    queue, responsible_boxes_mask
+                )
+
                 knls.particle_mask_knl(
-                    self.local_data[irank]["tgt_box_mask"],
+                    responsible_boxes_mask,
                     box_target_starts,
                     box_target_counts_nonchild,
                     particle_mask
@@ -374,7 +386,7 @@ class DistributedGeoData(object):
                 local_box_target_counts_nonchild = cl.array.zeros(
                     queue, (tree.nboxes,), dtype=tree.particle_id_dtype)
                 knls.generate_box_particle_counts_nonchild(
-                    self.local_data[irank]["tgt_box_mask"],
+                    responsible_boxes_mask,
                     box_target_counts_nonchild,
                     local_box_target_counts_nonchild
                 )
@@ -440,7 +452,10 @@ class DistributedGeoData(object):
             self.qbx_target_mask = np.empty((total_rank,), dtype=object)
 
             for irank in range(total_rank):
-                tgt_mask = self.local_data[irank]["tgt_mask"].get().astype(bool)
+
+                tgt_mask = np.zeros((tree.ntargets,), dtype=bool)
+                tgt_mask[self.local_data[irank].tgt_idx] = True
+
                 tgt_mask_user_order = tgt_mask[tree.sorted_target_ids]
                 centers_mask = tgt_mask_user_order[:ncenters]
                 centers_scan = np.empty(
@@ -892,20 +907,12 @@ def drive_dfmm(queue, root_wrangler, src_weights, distributed_geo_data,
     # {{{ Distribute source weights
 
     if current_rank == 0:
-        global_tree = root_wrangler.geo_data.tree()
         src_weights = root_wrangler.reorder_sources(src_weights)
-    else:
-        global_tree = None
 
     from boxtree.distributed.calculation import distribute_source_weights
 
-    if current_rank == 0:
-        queue = cl.CommandQueue(root_wrangler.geo_data.geo_data.cl_context)
-    else:
-        queue = None
-
     local_source_weights = distribute_source_weights(
-        queue, src_weights, global_tree, distributed_geo_data.local_data, comm=comm)
+        src_weights, distributed_geo_data.local_data, comm=comm)
 
     # }}}
 
