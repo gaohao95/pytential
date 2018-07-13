@@ -9,6 +9,7 @@ import pyopencl as cl
 from pyopencl.algorithm import ListOfListsBuilder
 import logging
 import time
+from boxtree.tools import return_timing_data
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,7 @@ class QBXDistributedFMMLibExpansionWrangler(
 
         return distributed_wrangler
 
+    @return_timing_data
     def eval_qbx_expansions(self, qbx_expansions):
         geo_data = self.geo_data
         ctt = geo_data.center_to_tree_targets()
@@ -921,7 +923,7 @@ def drive_dfmm(queue, root_wrangler, src_weights, distributed_geo_data,
     mpole_exps = wrangler.form_multipoles(
         local_traversal.level_start_source_box_nrs,
         local_traversal.source_boxes,
-        local_source_weights)
+        local_source_weights)[0]
 
     # }}}
 
@@ -953,7 +955,7 @@ def drive_dfmm(queue, root_wrangler, src_weights, distributed_geo_data,
         local_traversal.target_boxes,
         local_traversal.neighbor_source_boxes_starts,
         local_traversal.neighbor_source_boxes_lists,
-        local_source_weights)
+        local_source_weights)[0]
 
     # }}}
 
@@ -964,7 +966,7 @@ def drive_dfmm(queue, root_wrangler, src_weights, distributed_geo_data,
         local_traversal.target_or_target_parent_boxes,
         local_traversal.from_sep_siblings_starts,
         local_traversal.from_sep_siblings_lists,
-        mpole_exps)
+        mpole_exps)[0]
 
     # }}}
 
@@ -976,7 +978,7 @@ def drive_dfmm(queue, root_wrangler, src_weights, distributed_geo_data,
     non_qbx_potentials = non_qbx_potentials + wrangler.eval_multipoles(
         local_traversal.target_boxes_sep_smaller_by_source_level,
         local_traversal.from_sep_smaller_by_level,
-        mpole_exps)
+        mpole_exps)[0]
 
     # assert that list 3 close has been merged into list 1
     # assert global_traversal.from_sep_close_smaller_starts is None
@@ -985,7 +987,7 @@ def drive_dfmm(queue, root_wrangler, src_weights, distributed_geo_data,
             local_traversal.target_boxes,
             local_traversal.from_sep_close_smaller_starts,
             local_traversal.from_sep_close_smaller_lists,
-            local_source_weights)
+            local_source_weights)[0]
 
     # }}}
 
@@ -996,14 +998,14 @@ def drive_dfmm(queue, root_wrangler, src_weights, distributed_geo_data,
         local_traversal.target_or_target_parent_boxes,
         local_traversal.from_sep_bigger_starts,
         local_traversal.from_sep_bigger_lists,
-        local_source_weights)
+        local_source_weights)[0]
 
     if local_traversal.from_sep_close_bigger_starts is not None:
         non_qbx_potentials = non_qbx_potentials + wrangler.eval_direct(
             local_traversal.target_or_target_parent_boxes,
             local_traversal.from_sep_close_bigger_starts,
             local_traversal.from_sep_close_bigger_lists,
-            local_source_weights)
+            local_source_weights)[0]
 
     # }}}
 
@@ -1021,21 +1023,21 @@ def drive_dfmm(queue, root_wrangler, src_weights, distributed_geo_data,
     non_qbx_potentials = non_qbx_potentials + wrangler.eval_locals(
         local_traversal.level_start_target_box_nrs,
         local_traversal.target_boxes,
-        local_exps)
+        local_exps)[0]
 
     # }}}
 
     # {{{ wrangle qbx expansions
 
-    qbx_expansions = wrangler.form_global_qbx_locals(local_source_weights)
+    qbx_expansions = wrangler.form_global_qbx_locals(local_source_weights)[0]
 
     qbx_expansions = qbx_expansions + \
-        wrangler.translate_box_multipoles_to_qbx_local(mpole_exps)
+        wrangler.translate_box_multipoles_to_qbx_local(mpole_exps)[0]
 
     qbx_expansions = qbx_expansions + \
-        wrangler.translate_box_local_to_qbx_local(local_exps)
+        wrangler.translate_box_local_to_qbx_local(local_exps)[0]
 
-    qbx_potentials = wrangler.eval_qbx_expansions(qbx_expansions)
+    qbx_potentials = wrangler.eval_qbx_expansions(qbx_expansions)[0]
 
     # }}}
 
