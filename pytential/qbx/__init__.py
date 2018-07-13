@@ -106,6 +106,12 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
 
         # {{{ argument processing
 
+        if fine_order is None:
+            raise ValueError("fine_order must be provided.")
+
+        if qbx_order is None:
+            raise ValueError("qbx_order must be provided.")
+
         if target_stick_out_factor is not _not_provided:
             from warnings import warn
             warn("target_stick_out_factor has been renamed to "
@@ -132,6 +138,11 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
         if _box_extent_norm is None:
             _box_extent_norm = "l2"
 
+        if _from_sep_smaller_crit is None:
+            # This seems to win no matter what the box extent norm is
+            # https://gitlab.tiker.net/papers/2017-qbx-fmm-3d/issues/10
+            _from_sep_smaller_crit = "precise_linf"
+
         if fmm_level_to_order is None:
             if fmm_order is False:
                 fmm_level_to_order = False
@@ -141,9 +152,12 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
 
         if _max_leaf_refine_weight is None:
             if density_discr.ambient_dim == 2:
+                # FIXME: This should be verified now that l^2 is the default.
                 _max_leaf_refine_weight = 64
             elif density_discr.ambient_dim == 3:
-                _max_leaf_refine_weight = 128
+                # For static_linf/linf: https://gitlab.tiker.net/papers/2017-qbx-fmm-3d/issues/8#note_25009  # noqa
+                # For static_l2/l2: https://gitlab.tiker.net/papers/2017-qbx-fmm-3d/issues/12  # noqa
+                _max_leaf_refine_weight = 512
             else:
                 # Just guessing...
                 _max_leaf_refine_weight = 64
@@ -364,6 +378,28 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
         if self._to_refined_connection is not None:
             return ChainedDiscretizationConnection(
                     [self._to_refined_connection, conn])
+
+        return conn
+
+    @property
+    @memoize_method
+    def direct_resampler(self):
+        """
+        .. warning::
+
+            This always returns a
+            :class:`~meshmode.discretization.connection.DirectDiscretizationConnect`.
+            In case the geometry has been refined multiple times, a direct
+            connection can have a large number of groups and/or
+            interpolation batches, making it scale significantly worse than
+            the one returned by :attr:`resampler`.
+        """
+        from meshmode.discretization.connection import \
+                flatten_chained_connection
+
+        conn = self.resampler
+        with cl.CommandQueue(self.cl_context) as queue:
+            conn = flatten_chained_connection(queue, conn)
 
         return conn
 
