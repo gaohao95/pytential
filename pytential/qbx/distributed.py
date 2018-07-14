@@ -445,12 +445,7 @@ class DistributedGeoData(object):
             local_center_to_tree_targets = np.empty((total_rank,), dtype=object)
             local_qbx_targets = np.empty((total_rank,), dtype=object)
 
-            reqs_centers = np.empty((total_rank,), dtype=object)
-            reqs_global_qbx_centers = np.empty((total_rank,), dtype=object)
-            reqs_expansion_radii = np.empty((total_rank,), dtype=object)
-            reqs_qbx_center_to_target_box = np.empty((total_rank,), dtype=object)
-            reqs_center_to_tree_targets = np.empty((total_rank,), dtype=object)
-            reqs_qbx_targets = np.empty((total_rank,), dtype=object)
+            reqs = []
             self.qbx_target_mask = np.empty((total_rank,), dtype=object)
 
             for irank in range(total_rank):
@@ -476,11 +471,11 @@ class DistributedGeoData(object):
                     local_centers[irank][idims][:] = centers[idims][centers_mask]
 
                 if irank != 0:
-                    reqs_centers[irank] = comm.isend(
+                    reqs.append(comm.isend(
                         local_centers[irank],
                         dest=irank,
                         tag=MPITags["centers"]
-                    )
+                    ))
 
                 # }}}
 
@@ -490,11 +485,11 @@ class DistributedGeoData(object):
                     global_qbx_centers[centers_mask[global_qbx_centers]]]
 
                 if irank != 0:
-                    reqs_global_qbx_centers[irank] = comm.isend(
+                    reqs.append(comm.isend(
                         local_global_qbx_centers[irank],
                         dest=irank,
                         tag=MPITags["global_qbx_centers"]
-                    )
+                    ))
 
                 # }}}
 
@@ -502,11 +497,11 @@ class DistributedGeoData(object):
 
                 local_expansion_radii[irank] = expansion_radii[centers_mask]
                 if irank != 0:
-                    reqs_expansion_radii[irank] = comm.isend(
+                    reqs.append(comm.isend(
                         local_expansion_radii[irank],
                         dest=irank,
                         tag=MPITags["expansion_radii"]
-                    )
+                    ))
 
                 # }}}
 
@@ -520,11 +515,11 @@ class DistributedGeoData(object):
                 local_qbx_center_to_target_box[irank] = \
                     traversal.target_boxes[qbx_center_to_target_box[centers_mask]]
                 if irank != 0:
-                    reqs_qbx_center_to_target_box[irank] = comm.isend(
+                    reqs.append(comm.isend(
                         local_qbx_center_to_target_box[irank],
                         dest=irank,
                         tag=MPITags["qbx_center_to_target_box"]
-                    )
+                    ))
 
                 # }}}
 
@@ -572,46 +567,34 @@ class DistributedGeoData(object):
                 for idim in range(tree.dimensions):
                     local_qbx_targets[irank][idim, :] = \
                         tree.targets[idim][qbx_target_mask]
-                reqs_qbx_targets[irank] = comm.isend(
-                    local_qbx_targets[irank],
-                    dest=irank,
-                    tag=MPITags["qbx_targets"]
-                )
+                if irank != 0:
+                    reqs.append(comm.isend(
+                        local_qbx_targets[irank],
+                        dest=irank,
+                        tag=MPITags["qbx_targets"]
+                    ))
 
                 local_lists = qbx_target_scan[local_lists]
                 local_center_to_tree_targets[irank] = {
                     "starts": local_starts,
                     "lists": local_lists
                 }
-                reqs_center_to_tree_targets[irank] = comm.isend(
-                    local_center_to_tree_targets[irank],
-                    dest=irank,
-                    tag=MPITags["center_to_tree_targets"])
+                if irank != 0:
+                    reqs.append(comm.isend(
+                        local_center_to_tree_targets[irank],
+                        dest=irank,
+                        tag=MPITags["center_to_tree_targets"]
+                    ))
 
                 # }}}
 
-            for irank in range(1, total_rank):
-                reqs_centers[irank].wait()
+            MPI.Request.Waitall(reqs)
+
             local_centers = local_centers[0]
-
-            for irank in range(1, total_rank):
-                reqs_global_qbx_centers[irank].wait()
             local_global_qbx_centers = local_global_qbx_centers[0]
-
-            for irank in range(1, total_rank):
-                reqs_expansion_radii[irank].wait()
             local_expansion_radii = local_expansion_radii[0]
-
-            for irank in range(1, total_rank):
-                reqs_qbx_center_to_target_box[irank].wait()
             local_qbx_center_to_target_box = local_qbx_center_to_target_box[0]
-
-            for irank in range(1, total_rank):
-                reqs_center_to_tree_targets[irank].wait()
             local_center_to_tree_targets = local_center_to_tree_targets[0]
-
-            for irank in range(1, total_rank):
-                reqs_qbx_targets[irank].wait()
             local_qbx_targets = local_qbx_targets[0]
 
             logger.info("Distribute geometry data in {} secs.".format(
