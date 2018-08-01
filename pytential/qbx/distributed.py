@@ -3,6 +3,7 @@ from pytential.qbx import QBXLayerPotentialSource, _not_provided
 from boxtree.distributed.calculation import DistributedFMMLibExpansionWrangler
 from boxtree.tree import FilteredTargetListsInTreeOrder
 from boxtree.distributed.partition import ResponsibleBoxesQuery
+from boxtree.distributed.perf_model import PerformanceCounter, PerformanceModel
 from mpi4py import MPI
 import numpy as np
 import pyopencl as cl
@@ -143,10 +144,12 @@ class QBXDistributedFMMLibExpansionWrangler(
 # {{{ Distributed GeoData
 
 class DistributedGeoData(object):
-    def __init__(self, geo_data, queue, comm=MPI.COMM_WORLD):
+    def __init__(self, geo_data, queue, global_wrangler, comm=MPI.COMM_WORLD):
         self.comm = comm
         current_rank = comm.Get_rank()
         total_rank = comm.Get_size()
+
+        self.global_wrangler = global_wrangler
 
         if geo_data is not None:  # master process
             traversal = geo_data.traversal()
@@ -191,12 +194,17 @@ class DistributedGeoData(object):
 
         if current_rank == 0:
             from boxtree.distributed.partition import partition_work
-            from boxtree.distributed import WorkloadWeight
-            workload_weight = WorkloadWeight(
-                direct=1, m2l=1, m2p=1, p2l=1, multipole=5
-            )
+
+            counter = PerformanceCounter(traversal, global_wrangler, True)
+            # FIXME: If the expansion wrangler is not FMMLib, the argument
+            # 'uses_pde_expansions' might be different
+
+            model = PerformanceModel(queue.context, None, True, None)
+
+            model.load_default_model()
+
             responsible_boxes_list = partition_work(
-                traversal, comm.Get_size(), workload_weight
+                model, counter, traversal, comm.Get_size()
             )
         else:
             responsible_boxes_list = None
@@ -711,7 +719,7 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
 
         return obj
 
-    def distibuted_geo_data(self, geo_data, queue):
+    def distibuted_geo_data(self, geo_data, queue, wrangler):
         """ Note: This method needs to be called collectively by all processes of
         self.comm
         """
@@ -740,11 +748,12 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
             from pytential.qbx.fmmlib import ToHostTransferredGeoDataWrapper
             host_geo_data = ToHostTransferredGeoDataWrapper(queue, geo_data)
 
-            distributed_geo_data = DistributedGeoData(host_geo_data, queue,
-                                                      self.comm)
+            distributed_geo_data = DistributedGeoData(
+                host_geo_data, queue, wrangler, self.comm
+            )
 
         else:
-            distributed_geo_data = DistributedGeoData(None, queue, self.comm)
+            distributed_geo_data = DistributedGeoData(None, queue, None, self.comm)
 
         self.distributed_geo_data_cache[geo_data_id] = distributed_geo_data
 
@@ -753,18 +762,18 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
 
 # {{{ FMM Driver
 
-def drive_dfmm(queue, root_wrangler, src_weights, distributed_geo_data,
-               comm=MPI.COMM_WORLD,
+def drive_dfmm(queue, src_weights, distributed_geo_data, comm=MPI.COMM_WORLD,
                _communicate_mpoles_via_allreduce=False):
 
     current_rank = comm.Get_rank()
     total_rank = comm.Get_size()
+    global_wrangler = distributed_geo_data.global_wrangler
 
     if current_rank == 0:
         start_time = time.time()
 
     distributed_wrangler = QBXDistributedFMMLibExpansionWrangler.distribute(
-        queue, root_wrangler, distributed_geo_data)
+        queue, global_wrangler, distributed_geo_data)
     wrangler = distributed_wrangler
 
     local_traversal = distributed_geo_data.local_trav
@@ -772,7 +781,7 @@ def drive_dfmm(queue, root_wrangler, src_weights, distributed_geo_data,
     # {{{ Distribute source weights
 
     if current_rank == 0:
-        src_weights = root_wrangler.reorder_sources(src_weights)
+        src_weights = global_wrangler.reorder_sources(src_weights)
 
     from boxtree.distributed.calculation import distribute_source_weights
 
@@ -910,14 +919,14 @@ def drive_dfmm(queue, root_wrangler, src_weights, distributed_geo_data,
 
     else:  # master process
 
-        all_potentials_in_tree_order = root_wrangler.full_output_zeros()
+        all_potentials_in_tree_order = global_wrangler.full_output_zeros()
 
-        nqbtl = root_wrangler.geo_data.non_qbx_box_target_lists()
+        nqbtl = global_wrangler.geo_data.non_qbx_box_target_lists()
 
         from pytools.obj_array import make_obj_array
         non_qbx_potentials_all_rank = make_obj_array([
-            np.zeros(nqbtl.nfiltered_targets, root_wrangler.dtype)
-            for k in root_wrangler.outputs]
+            np.zeros(nqbtl.nfiltered_targets, global_wrangler.dtype)
+            for k in global_wrangler.outputs]
         )
 
         for irank in range(total_rank):
@@ -928,7 +937,7 @@ def drive_dfmm(queue, root_wrangler, src_weights, distributed_geo_data,
                 non_qbx_potentials_cur_rank = comm.recv(
                     source=irank, tag=MPITags["non_qbx_potentials"])
 
-            for idim in range(len(root_wrangler.outputs)):
+            for idim in range(len(global_wrangler.outputs)):
                 non_qbx_potentials_all_rank[idim][
                     distributed_geo_data.particle_mask[irank]
                 ] = non_qbx_potentials_cur_rank[idim]
@@ -946,7 +955,7 @@ def drive_dfmm(queue, root_wrangler, src_weights, distributed_geo_data,
                     source=irank, tag=MPITags["qbx_potentials"]
                 )
 
-            for idim in range(len(root_wrangler.outputs)):
+            for idim in range(len(global_wrangler.outputs)):
                 all_potentials_in_tree_order[idim][
                     distributed_geo_data.qbx_target_mask[irank]
                 ] = qbx_potentials_cur_rank[idim]
@@ -954,8 +963,8 @@ def drive_dfmm(queue, root_wrangler, src_weights, distributed_geo_data,
         def reorder_and_finalize_potentials(x):
             # "finalize" gives host FMMs (like FMMlib) a chance to turn the
             # potential back into a CL array.
-            return root_wrangler.finalize_potentials(
-                x[root_wrangler.tree.sorted_target_ids])
+            return global_wrangler.finalize_potentials(
+                x[global_wrangler.tree.sorted_target_ids])
 
         from pytools.obj_array import with_object_array_or_scalar
         result = with_object_array_or_scalar(
