@@ -195,7 +195,7 @@ class DistributedGeoData(object):
             from boxtree.distributed.partition import partition_work
 
             from pytential.qbx.perf_model import QBXPerformanceCounter
-            counter = QBXPerformanceCounter(traversal, global_wrangler, True)
+            counter = QBXPerformanceCounter(geo_data, global_wrangler, True)
             # FIXME: If the expansion wrangler is not FMMLib, the argument
             # 'uses_pde_expansions' might be different
 
