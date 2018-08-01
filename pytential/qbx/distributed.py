@@ -3,7 +3,6 @@ from pytential.qbx import QBXLayerPotentialSource, _not_provided
 from boxtree.distributed.calculation import DistributedFMMLibExpansionWrangler
 from boxtree.tree import FilteredTargetListsInTreeOrder
 from boxtree.distributed.partition import ResponsibleBoxesQuery
-from boxtree.distributed.perf_model import PerformanceCounter, PerformanceModel
 from mpi4py import MPI
 import numpy as np
 import pyopencl as cl
@@ -195,10 +194,12 @@ class DistributedGeoData(object):
         if current_rank == 0:
             from boxtree.distributed.partition import partition_work
 
-            counter = PerformanceCounter(traversal, global_wrangler, True)
+            from pytential.qbx.perf_model import QBXPerformanceCounter
+            counter = QBXPerformanceCounter(traversal, global_wrangler, True)
             # FIXME: If the expansion wrangler is not FMMLib, the argument
             # 'uses_pde_expansions' might be different
 
+            from boxtree.distributed.perf_model import PerformanceModel
             model = PerformanceModel(queue.context, None, True, None)
 
             model.load_default_model()
