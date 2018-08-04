@@ -186,3 +186,9 @@ class QBXPerformanceModel(PerformanceModel):
         self.drive_fmm(traversal, wrangler, source_weights, timing_data=timing_data)
 
         self.time_result.append(timing_data)
+
+    def predict_boxes_time(self, geo_data):
+        # TODO: Overwrite boxes time to incoporate QBX time.
+        return super(QBXPerformanceModel, self).predict_boxes_time(
+            geo_data.traversal()
+        )

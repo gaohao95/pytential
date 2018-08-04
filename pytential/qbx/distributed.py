@@ -192,20 +192,26 @@ class DistributedGeoData(object):
         # }}}
 
         if current_rank == 0:
-            from boxtree.distributed.partition import partition_work
+            def wrangler_factory(wrangler_tree):
+                import copy
+                new_wrangler = copy.copy(global_wrangler)
+                new_wrangler.tree = wrangler_tree
+                return new_wrangler
 
-            from pytential.qbx.perf_model import QBXPerformanceCounter
-            counter = QBXPerformanceCounter(geo_data, global_wrangler, True)
+            from pytential.qbx.perf_model import QBXPerformanceModel
+            model = QBXPerformanceModel(
+                queue.context, wrangler_factory, True, None
+            )
             # FIXME: If the expansion wrangler is not FMMLib, the argument
             # 'uses_pde_expansions' might be different
 
-            from boxtree.distributed.perf_model import PerformanceModel
-            model = PerformanceModel(queue.context, None, True, None)
-
             model.load_default_model()
 
+            boxes_time = model.predict_boxes_time(geo_data)
+
+            from boxtree.distributed.partition import partition_work
             responsible_boxes_list = partition_work(
-                model, counter, traversal, comm.Get_size()
+                boxes_time, traversal, comm.Get_size()
             )
         else:
             responsible_boxes_list = None
