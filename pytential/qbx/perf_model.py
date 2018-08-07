@@ -132,6 +132,7 @@ class QBXPerformanceCounter(PerformanceCounter):
 
             # list 4 close
             if traversal.from_sep_close_bigger_starts is not None:
+                # POSSIBLY USE INTERFACE WRONGLY
                 start, end = traversal.from_sep_close_bigger_starts[
                                 itgt_box:itgt_box + 2]
                 for src_ibox in traversal.from_sep_close_bigger_lists[start:end]:
@@ -187,8 +188,29 @@ class QBXPerformanceModel(PerformanceModel):
 
         self.time_result.append(timing_data)
 
+    def form_global_qbx_locals_model(self, wall_time=True):
+        return self.linear_regression(
+            "form_global_qbx_locals", ["p2qbxl_workload"],
+            wall_time=wall_time
+        )
+
     def predict_boxes_time(self, geo_data):
         # TODO: Overwrite boxes time to incoporate QBX time.
-        return super(QBXPerformanceModel, self).predict_boxes_time(
+        boxes_time = super(QBXPerformanceModel, self).predict_boxes_time(
             geo_data.traversal()
         )
+
+        wrangler = self.wrangler_factory(geo_data.tree())
+        counter = QBXPerformanceCounter(geo_data, wrangler, self.uses_pde_expansions)
+
+        # {{{ form_global_qbx_locals time
+
+        param = self.form_global_qbx_locals_model()
+
+        p2qbxl_workload = counter.count_p2qbxl()
+
+        boxes_time += (p2qbxl_workload * param[0] + param[1])
+
+        # }}}
+
+        return boxes_time
