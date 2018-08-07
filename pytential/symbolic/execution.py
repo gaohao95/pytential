@@ -26,7 +26,7 @@ import six
 from six.moves import zip
 
 from pymbolic.mapper.evaluator import (
-        EvaluationMapper as EvaluationMapperBase)
+        EvaluationMapper as PymbolicEvaluationMapper)
 import numpy as np
 
 import pyopencl as cl
@@ -42,11 +42,13 @@ from pytools import memoize_in
 
 # {{{ evaluation mapper
 
-class EvaluationMapper(EvaluationMapperBase):
-    def __init__(self, bound_expr, queue, context={},
+class EvaluationMapperBase(PymbolicEvaluationMapper):
+    def __init__(self, bound_expr, queue, context=None,
             target_geometry=None,
             target_points=None, target_normals=None, target_tangents=None):
-        EvaluationMapperBase.__init__(self, context)
+        if context is None:
+            context = {}
+        PymbolicEvaluationMapper.__init__(self, context)
 
         self.bound_expr = bound_expr
         self.queue = queue
@@ -175,6 +177,9 @@ class EvaluationMapper(EvaluationMapperBase):
         return [(name, evaluate(expr))
                 for name, expr in zip(insn.names, insn.exprs)], []
 
+    def exec_compute_potential_insn(self, queue, insn, bound_expr, evaluate):
+        raise NotImplementedError
+
     # {{{ functions
 
     def apply_real(self, args):
@@ -217,6 +222,67 @@ class EvaluationMapper(EvaluationMapperBase):
 
         else:
             return EvaluationMapperBase.map_call(self, expr)
+
+# }}}
+
+
+# {{{ evaluation mapper
+
+class EvaluationMapper(EvaluationMapperBase):
+
+    def __init__(self, bound_expr, queue, context=None,
+            timing_data=None):
+        EvaluationMapperBase.__init__(self, bound_expr, queue, context)
+        self.timing_data = timing_data
+
+    def exec_compute_potential_insn(self, queue, insn, bound_expr, evaluate):
+        source = bound_expr.places[insn.source]
+
+        result, futures, timing_data = (
+                source.exec_compute_potential_insn(
+                    queue, insn, bound_expr, evaluate))
+
+        if self.timing_data is not None:
+            self.timing_data[insn] = timing_data
+
+        return (result, futures)
+
+# }}}
+
+
+# {{{ performance model mapper
+
+class PerformanceModelMapper(EvaluationMapperBase):
+    """Mapper for evaluating performance models.
+
+    This executes everything *except* the layer potential operator. Instead of
+    executing the operator, the performance model gets run and the performance
+    data is collected.
+    """
+
+    def __init__(self, bound_expr, queue, context=None,
+            target_geometry=None,
+            target_points=None, target_normals=None, target_tangents=None):
+        if context is None:
+            context = {}
+        EvaluationMapperBase.__init__(
+                self, bound_expr, queue, context,
+                target_geometry,
+                target_points,
+                target_normals,
+                target_tangents)
+        self.modeled_performance = {}
+
+    def exec_compute_potential_insn(self, queue, insn, bound_expr, evaluate):
+        source = bound_expr.places[insn.source]
+        result, futures, perf_model_result = (
+                source.perf_model_compute_potential_insn(
+                    queue, insn, bound_expr, evaluate))
+        self.modeled_performance[insn] = perf_model_result
+        return result, futures
+
+    def get_modeled_performance(self):
+        return self.modeled_performance
 
 # }}}
 
@@ -327,6 +393,11 @@ class BoundExpression:
 
         return discr
 
+    def get_modeled_performance(self, queue, **args):
+        perf_model_mapper = PerformanceModelMapper(self, queue, args)
+        self.code.execute(perf_model_mapper)
+        return perf_model_mapper.get_modeled_performance()
+
     def scipy_op(self, queue, arg_name, dtype, domains=None, **extra_args):
         """
         :arg domains: a list of discretization identifiers or
@@ -366,9 +437,15 @@ class BoundExpression:
         return MatVecOp(self, queue,
                 arg_name, dtype, total_dofs, starts_and_ends, extra_args)
 
-    def __call__(self, queue, **args):
-        exec_mapper = EvaluationMapper(self, queue, args)
+    def eval(self, queue, context=None, timing_data=None):
+        if context is None:
+            context = {}
+        exec_mapper = EvaluationMapper(
+                self, queue, context, timing_data=timing_data)
         return self.code.execute(exec_mapper)
+
+    def __call__(self, queue, **args):
+        return self.eval(queue, args)
 
 # }}}
 

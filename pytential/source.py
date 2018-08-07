@@ -109,6 +109,10 @@ class PointPotentialSource(PotentialSource):
 
         return p2p
 
+    def perf_model_compute_potential_insn(self, queue, insn, bound_expr,
+                                          evaluate, costs):
+        raise NotImplementedError
+
     def exec_compute_potential_insn(self, queue, insn, bound_expr, evaluate):
         p2p = None
 
@@ -134,7 +138,9 @@ class PointPotentialSource(PotentialSource):
 
             result.append((o.name, output_for_each_kernel[o.kernel_index]))
 
-        return result, []
+        timing_data = {}
+        new_futures = []
+        return result, new_futures, timing_data
 
     @memoize_method
     def weights_and_area_elements(self):
@@ -174,6 +180,7 @@ class LayerPotentialSourceBase(PotentialSource):
     .. rubric:: Execution
 
     .. method:: weights_and_area_elements
+    .. method:: perf_model_compute_potential_insn
     .. method:: exec_compute_potential_insn
     """
 
