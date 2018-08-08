@@ -147,6 +147,53 @@ class QBXPerformanceCounter(PerformanceCounter):
 
         return np2qbxl
 
+    def count_m2qbxl(self, use_global_idx=False):
+        geo_data = self.geo_data
+        traversal = self.traversal
+        tree = traversal.tree
+        global_qbx_centers = geo_data.global_qbx_centers()
+        qbx_center_to_target_box_source_level = \
+            geo_data.qbx_center_to_target_box_source_level()
+
+        if use_global_idx:
+            nm2qbxl = np.zeros((tree.nboxes,), dtype=np.intp)
+        else:
+            ntarget_boxes = len(traversal.target_boxes)
+            nm2qbxl = np.zeros((ntarget_boxes,), dtype=np.intp)
+
+        for isrc_level, ssn in enumerate(traversal.from_sep_smaller_by_level):
+
+            target_boxes_sep_smaller_current_level = \
+                traversal.target_boxes_sep_smaller_by_source_level[isrc_level]
+
+            cost_coefficient = self.xlat_cost(
+                self.wrangler.level_nterms[isrc_level],
+                self.wrangler.qbx_order,
+                self.parameters
+            )
+
+            for itgt_center, tgt_icenter in enumerate(global_qbx_centers):
+                icontaining_tgt_box = qbx_center_to_target_box_source_level[
+                    isrc_level][tgt_icenter]
+
+                if icontaining_tgt_box == -1:
+                    continue
+
+                start, stop = (
+                        ssn.starts[icontaining_tgt_box],
+                        ssn.starts[icontaining_tgt_box+1])
+
+                cost = (stop - start) * cost_coefficient
+
+                if use_global_idx:
+                    global_boxes_idx = \
+                        target_boxes_sep_smaller_current_level[icontaining_tgt_box]
+                    nm2qbxl[global_boxes_idx] += cost
+                else:
+                    target_boxes_idx = ssn.nonempty_indices[icontaining_tgt_box]
+                    nm2qbxl[target_boxes_idx] += cost
+
+        return nm2qbxl
 
 class QBXPerformanceModel(PerformanceModel):
 
@@ -189,6 +236,8 @@ class QBXPerformanceModel(PerformanceModel):
         p2qbxl_workload = counter.count_p2qbxl(use_global_idx=True)
 
         boxes_time += (p2qbxl_workload * param[0] + param[1])
+
+        # }}}
 
         return boxes_time
 
