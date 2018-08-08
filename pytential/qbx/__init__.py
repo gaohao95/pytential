@@ -661,7 +661,8 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
             value = evaluate(expr)
             return with_object_array_or_scalar(oversample_nonscalars, value)
 
-        return func(queue, insn, bound_expr, evaluate_wrapper)
+        return func(queue, insn, bound_expr, evaluate_wrapper,
+                    timing_data=evaluate.timing_data)
 
     @property
     @memoize_method
@@ -783,7 +784,8 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
 
     # {{{ execute fmm
 
-    def exec_compute_potential_insn_fmm(self, queue, insn, bound_expr, evaluate):
+    def exec_compute_potential_insn_fmm(self, queue, insn, bound_expr, evaluate,
+                                        timing_data={}):
         target_name_and_side_to_number, target_discrs_and_qbx_sides = (
                 self.get_target_discrs_and_qbx_sides(insn, bound_expr))
 
@@ -843,7 +845,6 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                 queue, strengths, distributed_geo_data, comm=self.comm)
         else:
             from pytential.qbx.fmm import drive_fmm
-            timing_data = {}
             all_potentials_on_every_tgt = drive_fmm(wrangler, strengths, timing_data)
 
         # }}}

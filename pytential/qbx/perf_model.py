@@ -1,7 +1,6 @@
 import numpy as np
 from boxtree.distributed.perf_model import PerformanceCounter, PerformanceModel
 from collections import namedtuple
-import pyopencl as cl
 
 QBXParameters = namedtuple(
     "QBXParameters",
@@ -105,6 +104,7 @@ class QBXPerformanceCounter(PerformanceCounter):
         geo_data = self.geo_data
         traversal = self.traversal
         tree = traversal.tree
+        qbx_center_to_target_box = geo_data.qbx_center_to_target_box()
 
         if use_global_idx:
             np2qbxl = np.zeros((tree.nboxes,), dtype=np.intp)
@@ -112,8 +112,8 @@ class QBXPerformanceCounter(PerformanceCounter):
             ntarget_boxes = len(traversal.target_boxes)
             np2qbxl = np.zeros((ntarget_boxes,), dtype=np.intp)
 
-        for tgt_icenter in geo_data.global_qbx_centers:
-            itgt_box = geo_data.qbx_center_to_target_box[tgt_icenter]
+        for tgt_icenter in geo_data.global_qbx_centers():
+            itgt_box = qbx_center_to_target_box[tgt_icenter]
 
             np2qbxl_srcs = 0
 
@@ -150,41 +150,21 @@ class QBXPerformanceCounter(PerformanceCounter):
 
 class QBXPerformanceModel(PerformanceModel):
 
-    def time_performance(self, geo_data):
-        traversal = geo_data.traversal()
-
-        wrangler = self.wrangler_factory(tree=traversal.tree)
-
-        counter = QBXPerformanceCounter(
-            geo_data, wrangler, self.uses_pde_expansions
+    def __init__(self, cl_context, uses_pde_expansions):
+        super(QBXPerformanceModel, self).__init__(
+            cl_context, uses_pde_expansions
         )
 
-        # Record useful metadata for assembling performance data
-        nm2p, nm2p_boxes = counter.count_m2p()
-
+    def time_qbx_performance(self, queue, bound_op, context):
         timing_data = {
-            "nterms_fmm_total": counter.count_nters_fmm_total(),
-            "direct_workload": np.sum(counter.count_direct()),
-            "direct_nsource_boxes": traversal.neighbor_source_boxes_starts[-1],
-            "m2l_workload": np.sum(counter.count_m2l()),
-            "m2p_workload": np.sum(nm2p),
-            "m2p_nboxes": np.sum(nm2p_boxes),
-            "p2l_workload": np.sum(counter.count_p2l()),
-            "p2l_nboxes": np.sum(counter.count_p2l_source_boxes()),
-            "eval_part_workload": np.sum(counter.count_eval_part()),
-            "p2qbxl_workload": np.sum(counter.count_p2qbxl())
+            'WITH_COUNTER': True,
+            'USES_PDE_EXPRESSIONS': self.uses_pde_expansions
         }
 
-        # Generate random source weights
-        with cl.CommandQueue(self.cl_context) as queue:
-            source_weights = self.rng.uniform(
-                queue,
-                traversal.tree.nsources,
-                traversal.tree.coord_dtype
-            ).get()
+        bound_op.eval(queue, context=context, timing_data=timing_data)
 
-        # Time a FMM run
-        self.drive_fmm(traversal, wrangler, source_weights, timing_data=timing_data)
+        timing_data.pop('WITH_COUNTER')
+        timing_data.pop('USES_PDE_EXPRESSIONS')
 
         self.time_result.append(timing_data)
 
@@ -194,23 +174,26 @@ class QBXPerformanceModel(PerformanceModel):
             wall_time=wall_time
         )
 
-    def predict_boxes_time(self, geo_data):
+    def predict_boxes_time(self, geo_data, wrangler):
         # TODO: Overwrite boxes time to incoporate QBX time.
         boxes_time = super(QBXPerformanceModel, self).predict_boxes_time(
-            geo_data.traversal()
+            geo_data.traversal(), wrangler
         )
 
-        wrangler = self.wrangler_factory(geo_data.tree())
         counter = QBXPerformanceCounter(geo_data, wrangler, self.uses_pde_expansions)
 
         # {{{ form_global_qbx_locals time
 
         param = self.form_global_qbx_locals_model()
 
-        p2qbxl_workload = counter.count_p2qbxl()
+        p2qbxl_workload = counter.count_p2qbxl(use_global_idx=True)
 
         boxes_time += (p2qbxl_workload * param[0] + param[1])
 
-        # }}}
-
         return boxes_time
+
+    def load_default_model(self):
+        import os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        default_perf_file_path = os.path.join(current_dir, 'default_perf_model.json')
+        self.loadjson(default_perf_file_path)

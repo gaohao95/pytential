@@ -374,6 +374,20 @@ QBXFMMGeometryData.non_qbx_box_target_lists`),
 
 # {{{ FMM top-level
 
+def add_dicts(dict1, dict2):
+    rtv = {}
+
+    for key in set(dict1) | set(dict2):
+        if key not in dict1:
+            rtv[key] = dict2[key]
+        elif key not in dict2:
+            rtv[key] = dict1[key]
+        else:
+            rtv[key] = dict1[key] + dict2[key]
+
+    return rtv
+
+
 def drive_fmm(expansion_wrangler, src_weights, timing_data=None):
     """Top-level driver routine for the QBX fast multipole calculation.
 
@@ -395,6 +409,29 @@ def drive_fmm(expansion_wrangler, src_weights, timing_data=None):
     traversal = geo_data.traversal()
     tree = traversal.tree
     recorder = TimingRecorder()
+
+    if timing_data is not None and 'WITH_COUNTER' in timing_data:
+        from pytential.qbx.perf_model import QBXPerformanceCounter
+        counter = QBXPerformanceCounter(
+            geo_data, wrangler, timing_data['USES_PDE_EXPRESSIONS']
+        )
+
+        nm2p, nm2p_boxes = counter.count_m2p()
+
+        timing_data.update(add_dicts(timing_data, {
+            "nterms_fmm_total": counter.count_nters_fmm_total(),
+            "direct_workload": np.sum(counter.count_direct()),
+            "direct_nsource_boxes": traversal.neighbor_source_boxes_starts[-1],
+            "m2l_workload": np.sum(counter.count_m2l()),
+            "m2p_workload": np.sum(nm2p),
+            "m2p_nboxes": np.sum(nm2p_boxes),
+            "p2l_workload": np.sum(counter.count_p2l()),
+            "p2l_nboxes": np.sum(counter.count_p2l_source_boxes()),
+            "eval_part_workload": np.sum(counter.count_eval_part()),
+            "p2qbxl_workload": np.sum(counter.count_p2qbxl())
+        }))
+
+        # CAUTION: Using add_dicts limits the
 
     # Interface guidelines: Attributes of the tree are assumed to be known
     # to the expansion wrangler and should not be passed.
@@ -562,7 +599,7 @@ def drive_fmm(expansion_wrangler, src_weights, timing_data=None):
     fmm_proc.done()
 
     if timing_data is not None:
-        timing_data.update(recorder.summarize())
+        timing_data.update(add_dicts(timing_data, recorder.summarize()))
 
     return result
 
