@@ -195,6 +195,67 @@ class QBXPerformanceCounter(PerformanceCounter):
 
         return nm2qbxl
 
+    def count_l2qbxl(self, use_global_idx=False):
+        geo_data = self.geo_data
+        traversal = self.traversal
+        tree = traversal.tree
+        qbx_center_to_target_box = geo_data.qbx_center_to_target_box()
+        global_qbx_centers = geo_data.global_qbx_centers()
+
+        if use_global_idx:
+            nl2qbxl = np.zeros(tree.nboxes, dtype=np.intp)
+        else:
+            ntarget_boxes = len(traversal.target_boxes)
+            nl2qbxl = np.zeros(ntarget_boxes, dtype=np.intp)
+
+        for src_icenter in global_qbx_centers:
+            target_box_idx = qbx_center_to_target_box[src_icenter]
+            global_box_idx = traversal.target_boxes[target_box_idx]
+
+            box_level = tree.box_levels[global_box_idx]
+
+            cost = self.xlat_cost(
+                self.wrangler.level_nterms[box_level],
+                self.wrangler.qbx_order,
+                self.parameters
+            )
+
+            if use_global_idx:
+                nl2qbxl[global_box_idx] += cost
+            else:
+                nl2qbxl[target_box_idx] += cost
+
+        return nl2qbxl
+
+    def count_eval_qbxl(self, use_global_idx=False):
+        geo_data = self.geo_data
+        traversal = self.traversal
+        tree = traversal.tree
+        qbx_center_to_target_box = geo_data.qbx_center_to_target_box()
+        global_qbx_centers = geo_data.global_qbx_centers()
+        center_to_targets_starts = geo_data.center_to_tree_targets().starts
+
+        if use_global_idx:
+            neval_qbxl = np.zeros((tree.nboxes,), dtype=np.intp)
+        else:
+            ntarget_boxes = len(traversal.target_boxes)
+            neval_qbxl = np.zeros((ntarget_boxes,), dtype=np.intp)
+
+        for src_icenter in global_qbx_centers:
+            start, end = center_to_targets_starts[src_icenter:src_icenter+2]
+            cost = (end - start) * self.parameters.ncoeffs_qbx
+
+            target_box_idx = qbx_center_to_target_box[src_icenter]
+
+            if use_global_idx:
+                global_box_idx = traversal.target_boxes[target_box_idx]
+                neval_qbxl[global_box_idx] += cost
+            else:
+                neval_qbxl[target_box_idx] += cost
+
+        return neval_qbxl
+
+
 class QBXPerformanceModel(PerformanceModel):
 
     def __init__(self, cl_context, uses_pde_expansions):
