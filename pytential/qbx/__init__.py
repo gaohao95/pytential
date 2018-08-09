@@ -838,8 +838,7 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                 return [(o.name, 0) for o in insn.outputs], []
 
         if self.expansion_wrangler_inspector is not None:
-            rtv = self.expansion_wrangler_inspector(wrangler)
-            return rtv
+            self.expansion_wrangler_inspector(wrangler)
 
         # }}}
 
@@ -1040,6 +1039,12 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
         return result, new_futures, timing_data
 
     # }}}
+
+    def bind_expansion_wrangler_inspector(self, inspector):
+        if self.expansion_wrangler_inspector is not None:
+            raise NotImplementedError("Cannot bind multiple inspectors.")
+
+        self.expansion_wrangler_inspector = inspector
 
     # }}}
 

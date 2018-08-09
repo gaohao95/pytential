@@ -264,15 +264,36 @@ class QBXPerformanceModel(PerformanceModel):
         )
 
     def time_qbx_performance(self, queue, bound_op, context):
-        timing_data = {
-            'WITH_COUNTER': True,
-            'USES_PDE_EXPRESSIONS': self.uses_pde_expansions
-        }
+        timing_data = {}
+
+        def expansion_wrangler_inspector(wrangler):
+            counter = QBXPerformanceCounter(
+                wrangler.geo_data, wrangler, self.uses_pde_expansions
+            )
+            traversal = wrangler.geo_data.traversal()
+
+            nm2p, nm2p_boxes = counter.count_m2p()
+
+            from pytential.qbx.fmm import add_dicts
+            timing_data.update(add_dicts(timing_data, {
+                "nterms_fmm_total": counter.count_nters_fmm_total(),
+                "direct_workload": np.sum(counter.count_direct()),
+                "direct_nsource_boxes": traversal.neighbor_source_boxes_starts[-1],
+                "m2l_workload": np.sum(counter.count_m2l()),
+                "m2p_workload": np.sum(nm2p),
+                "m2p_nboxes": np.sum(nm2p_boxes),
+                "p2l_workload": np.sum(counter.count_p2l()),
+                "p2l_nboxes": np.sum(counter.count_p2l_source_boxes()),
+                "eval_part_workload": np.sum(counter.count_eval_part()),
+                "p2qbxl_workload": np.sum(counter.count_p2qbxl())
+            }))
+
+        from pytential.symbolic.primitives import DEFAULT_SOURCE
+        bound_op.places[DEFAULT_SOURCE].bind_expansion_wrangler_inspector(
+            expansion_wrangler_inspector
+        )
 
         bound_op.eval(queue, context=context, timing_data=timing_data)
-
-        timing_data.pop('WITH_COUNTER')
-        timing_data.pop('USES_PDE_EXPRESSIONS')
 
         self.time_result.append(timing_data)
 

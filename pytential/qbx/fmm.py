@@ -410,29 +410,6 @@ def drive_fmm(expansion_wrangler, src_weights, timing_data=None):
     tree = traversal.tree
     recorder = TimingRecorder()
 
-    if timing_data is not None and 'WITH_COUNTER' in timing_data:
-        from pytential.qbx.perf_model import QBXPerformanceCounter
-        counter = QBXPerformanceCounter(
-            geo_data, wrangler, timing_data['USES_PDE_EXPRESSIONS']
-        )
-
-        nm2p, nm2p_boxes = counter.count_m2p()
-
-        timing_data.update(add_dicts(timing_data, {
-            "nterms_fmm_total": counter.count_nters_fmm_total(),
-            "direct_workload": np.sum(counter.count_direct()),
-            "direct_nsource_boxes": traversal.neighbor_source_boxes_starts[-1],
-            "m2l_workload": np.sum(counter.count_m2l()),
-            "m2p_workload": np.sum(nm2p),
-            "m2p_nboxes": np.sum(nm2p_boxes),
-            "p2l_workload": np.sum(counter.count_p2l()),
-            "p2l_nboxes": np.sum(counter.count_p2l_source_boxes()),
-            "eval_part_workload": np.sum(counter.count_eval_part()),
-            "p2qbxl_workload": np.sum(counter.count_p2qbxl())
-        }))
-
-        # CAUTION: Using add_dicts limits the
-
     # Interface guidelines: Attributes of the tree are assumed to be known
     # to the expansion wrangler and should not be passed.
 
