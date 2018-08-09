@@ -84,6 +84,7 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
             _from_sep_smaller_min_nsources_cumul=None,
             _tree_kind="adaptive",
             geometry_data_inspector=None,
+            expansion_wrangler_inspector=None,
             performance_model=None,
             fmm_backend="sumpy",
             target_stick_out_factor=_not_provided):
@@ -204,6 +205,7 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                 _from_sep_smaller_min_nsources_cumul
         self._tree_kind = _tree_kind
         self.geometry_data_inspector = geometry_data_inspector
+        self.expansion_wrangler_inspector = expansion_wrangler_inspector
         self.performance_model = performance_model
 
         # /!\ *All* parameters set here must also be set by copy() below,
@@ -227,6 +229,7 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
             _from_sep_smaller_crit=None,
             _tree_kind=None,
             geometry_data_inspector=None,
+            expansion_wrangler_inspector=None,
             performance_model=_not_provided,
             fmm_backend=None,
 
@@ -311,6 +314,9 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                 _tree_kind=_tree_kind or self._tree_kind,
                 geometry_data_inspector=(
                     geometry_data_inspector or self.geometry_data_inspector),
+                expansion_wrangler_inspector=(
+                    expansion_wrangler_inspector or self.expansion_wrangler_inspector
+                ),
                 performance_model=(
                     # None is a valid value here
                     performance_model
@@ -830,6 +836,10 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
             perform_fmm = self.geometry_data_inspector(insn, bound_expr, geo_data)
             if not perform_fmm:
                 return [(o.name, 0) for o in insn.outputs], []
+
+        if self.expansion_wrangler_inspector is not None:
+            rtv = self.expansion_wrangler_inspector(wrangler)
+            return rtv
 
         # }}}
 
