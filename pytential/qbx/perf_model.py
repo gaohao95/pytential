@@ -152,8 +152,6 @@ class QBXPerformanceCounter(PerformanceCounter):
         traversal = self.traversal
         tree = traversal.tree
         global_qbx_centers = geo_data.global_qbx_centers()
-        qbx_center_to_target_box_source_level = \
-            geo_data.qbx_center_to_target_box_source_level()
 
         if use_global_idx:
             nm2qbxl = np.zeros((tree.nboxes,), dtype=np.intp)
@@ -172,9 +170,13 @@ class QBXPerformanceCounter(PerformanceCounter):
                 self.parameters
             )
 
+            qbx_center_to_target_box_current_level = \
+                geo_data.qbx_center_to_target_box_source_level(isrc_level)
+
             for itgt_center, tgt_icenter in enumerate(global_qbx_centers):
-                icontaining_tgt_box = qbx_center_to_target_box_source_level[
-                    isrc_level][tgt_icenter]
+                icontaining_tgt_box = qbx_center_to_target_box_current_level[
+                    tgt_icenter
+                ]
 
                 if icontaining_tgt_box == -1:
                     continue
@@ -288,7 +290,10 @@ class QBXPerformanceModel(PerformanceModel):
                 "p2l_workload": np.sum(counter.count_p2l()),
                 "p2l_nboxes": np.sum(counter.count_p2l_source_boxes()),
                 "eval_part_workload": np.sum(counter.count_eval_part()),
-                "p2qbxl_workload": np.sum(counter.count_p2qbxl())
+                "p2qbxl_workload": np.sum(counter.count_p2qbxl()),
+                "m2qbxl_workload": np.sum(counter.count_m2qbxl()),
+                "l2qbxl_workload": np.sum(counter.count_l2qbxl()),
+                "eval_qbxl_workload": np.sum(counter.count_eval_qbxl())
             }))
 
         from pytential.symbolic.primitives import DEFAULT_SOURCE
@@ -303,6 +308,24 @@ class QBXPerformanceModel(PerformanceModel):
     def form_global_qbx_locals_model(self, wall_time=True):
         return self.linear_regression(
             "form_global_qbx_locals", ["p2qbxl_workload"],
+            wall_time=wall_time
+        )
+
+    def translate_box_multipoles_to_qbx_local_model(self, wall_time=True):
+        return self.linear_regression(
+            "translate_box_multipoles_to_qbx_local", ["m2qbxl_workload"],
+            wall_time=wall_time
+        )
+
+    def translate_box_local_to_qbx_local_model(self, wall_time=True):
+        return self.linear_regression(
+            "translate_box_local_to_qbx_local", ["l2qbxl_workload"],
+            wall_time=wall_time
+        )
+
+    def eval_qbx_expansions_model(self, wall_time=True):
+        return self.linear_regression(
+            "eval_qbx_expansions", ["eval_qbxl_workload"],
             wall_time=wall_time
         )
 
@@ -323,7 +346,35 @@ class QBXPerformanceModel(PerformanceModel):
 
         # }}}
 
-        # TODO: Overwrite boxes time to incoporate QBX time.
+        # {{{ translate_box_multipoles_to_qbx_local time
+
+        param = self.translate_box_multipoles_to_qbx_local_model()
+
+        m2qbxl_workload = counter.count_m2qbxl(use_global_idx=True)
+
+        boxes_time += (m2qbxl_workload * param[0] + param[1])
+
+        # }}}
+
+        # {{{ translate_box_local_to_qbx_local time
+
+        param = self.translate_box_local_to_qbx_local_model()
+
+        l2qbxl_workload = counter.count_l2qbxl(use_global_idx=True)
+
+        boxes_time += (l2qbxl_workload * param[0] + param[1])
+
+        # }}}
+
+        # {{{ eval_qbx_expansions time
+
+        param = self.eval_qbx_expansions_model()
+
+        eval_qbxl_workload = counter.count_eval_qbxl(use_global_idx=True)
+
+        boxes_time += (eval_qbxl_workload * param[0] + param[1])
+
+        # }}}
 
         return boxes_time
 
@@ -344,7 +395,41 @@ class QBXPerformanceModel(PerformanceModel):
 
         # }}}
 
-        # TODO: implement pytential specific fields
+        # {{{ Predict translate_box_multipoles_to_qbx_local time
+
+        param = self.translate_box_multipoles_to_qbx_local_model(wall_time=wall_time)
+
+        m2qbxl_workload = np.sum(eval_counter.count_m2qbxl())
+
+        predict_timing["translate_box_multipoles_to_qbx_local"] = (
+            m2qbxl_workload * param[0] + param[1]
+        )
+
+        # }}}
+
+        # {{{ Predict translate_box_local_to_qbx_local time
+
+        param = self.translate_box_local_to_qbx_local_model(wall_time=wall_time)
+
+        l2qbxl_workload = np.sum(eval_counter.count_l2qbxl())
+
+        predict_timing["translate_box_local_to_qbx_local"] = (
+            l2qbxl_workload * param[0] + param[1]
+        )
+
+        # }}}
+
+        # {{{ Predict eval_qbx_expansions time
+
+        param = self.eval_qbx_expansions_model(wall_time=wall_time)
+
+        eval_qbxl_workload = np.sum(eval_counter.count_eval_qbxl())
+
+        predict_timing["eval_qbx_expansions"] = (
+            eval_qbxl_workload * param[0] + param[1]
+        )
+
+        # }}}
 
         return predict_timing
 
@@ -371,7 +456,9 @@ class QBXPerformanceModel(PerformanceModel):
         bound_op.eval(queue, context=context, timing_data=actual_timing)
 
         for field in ["eval_direct", "multipole_to_local", "eval_multipoles",
-                      "form_locals", "eval_locals", "form_global_qbx_locals"]:
+                      "form_locals", "eval_locals", "form_global_qbx_locals",
+                      "translate_box_multipoles_to_qbx_local",
+                      "translate_box_local_to_qbx_local", "eval_qbx_expansions"]:
             predict_time_field = predict_timing[field]
 
             if wall_time:
