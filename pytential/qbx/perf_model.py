@@ -263,6 +263,9 @@ class QBXPerformanceModel(PerformanceModel):
             cl_context, uses_pde_expansions
         )
 
+    def time_performance(self, traversal, wrangler):
+        raise NotImplementedError("Please use time_qbx_performance instead.")
+
     def time_qbx_performance(self, queue, bound_op, context):
         timing_data = {}
 
@@ -304,7 +307,6 @@ class QBXPerformanceModel(PerformanceModel):
         )
 
     def predict_boxes_time(self, geo_data, wrangler):
-        # TODO: Overwrite boxes time to incoporate QBX time.
         boxes_time = super(QBXPerformanceModel, self).predict_boxes_time(
             geo_data.traversal(), wrangler
         )
@@ -321,7 +323,66 @@ class QBXPerformanceModel(PerformanceModel):
 
         # }}}
 
+        # TODO: Overwrite boxes time to incoporate QBX time.
+
         return boxes_time
+
+    def predict_step_time(self, eval_counter, wall_time=True):
+        predict_timing = super(QBXPerformanceModel, self).predict_step_time(
+            eval_counter, wall_time=wall_time
+        )
+
+        # {{{ Predict form_global_qbx_locals time
+
+        param = self.form_global_qbx_locals_model(wall_time=wall_time)
+
+        p2qbxl_workload = np.sum(eval_counter.count_p2qbxl())
+
+        predict_timing["form_global_qbx_locals"] = (
+            p2qbxl_workload * param[0] + param[1]
+        )
+
+        # }}}
+
+        # TODO: implement pytential specific fields
+
+        return predict_timing
+
+    def evaluate_model(self, queue, bound_op, context, wall_time=True):
+        predict_timing = {}
+
+        def expansion_wrangler_inspector(wrangler):
+            eval_counter = QBXPerformanceCounter(
+                wrangler.geo_data, wrangler, self.uses_pde_expansions
+            )
+
+            from pytential.qbx.fmm import add_dicts
+            predict_timing.update(add_dicts(
+                predict_timing,
+                self.predict_step_time(eval_counter, wall_time=wall_time)
+            ))
+
+        from pytential.symbolic.primitives import DEFAULT_SOURCE
+        bound_op.places[DEFAULT_SOURCE].bind_expansion_wrangler_inspector(
+            expansion_wrangler_inspector
+        )
+
+        actual_timing = {}
+        bound_op.eval(queue, context=context, timing_data=actual_timing)
+
+        for field in ["eval_direct", "multipole_to_local", "eval_multipoles",
+                      "form_locals", "eval_locals", "form_global_qbx_locals"]:
+            predict_time_field = predict_timing[field]
+
+            if wall_time:
+                true_time_field = actual_timing[field].wall_elapsed
+            else:
+                true_time_field = actual_timing[field].process_elapsed
+
+            diff = abs(predict_time_field - true_time_field)
+
+            print(field + ": predict " + str(predict_time_field) + " actual "
+                  + str(true_time_field) + " error " + str(diff / true_time_field))
 
     def load_default_model(self):
         import os
