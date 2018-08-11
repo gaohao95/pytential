@@ -46,10 +46,10 @@ class QBXPerformanceCounter(PerformanceCounter):
             translation_max_power=fmm_parameters.translation_max_power,
         )
 
-    def count_direct(self, use_global_idx=False):
+    def count_direct(self, use_global_idx=False, box_target_counts_nonchild=None):
         """
-        This method overwrites the one in parent class because the only non-qbx
-        targets should be counted.
+        This method overwrites the one in parent class because only non-qbx targets
+        should be counted.
 
         :return: If *use_global_idx* is True, return a numpy array of shape
             (tree.nboxes,) such that the ith entry represents the workload from
@@ -57,48 +57,42 @@ class QBXPerformanceCounter(PerformanceCounter):
             array of shape (ntarget_boxes,) such that the ith entry represents the
             workload on *target_boxes* i.
         """
-        box_target_counts_nonchild = self.geo_data.non_qbx_box_target_lists()\
-                                         .box_target_counts_nonchild
-        traversal = self.traversal
-        tree = traversal.tree
+        if box_target_counts_nonchild is None:
+            box_target_counts_nonchild = self.geo_data.non_qbx_box_target_lists()\
+                                             .box_target_counts_nonchild
 
-        if use_global_idx:
-            direct_workload = np.zeros((tree.nboxes,), dtype=np.intp)
-        else:
-            ntarget_boxes = len(traversal.target_boxes)
-            direct_workload = np.zeros((ntarget_boxes,), dtype=np.intp)
+        return super(QBXPerformanceCounter, self).count_direct(
+            use_global_idx=use_global_idx,
+            box_target_counts_nonchild=box_target_counts_nonchild
+        )
 
-        for itgt_box, tgt_ibox in enumerate(traversal.target_boxes):
-            ntargets = box_target_counts_nonchild[tgt_ibox]
-            nsources = 0
+    def count_m2p(self, use_global_idx=False, box_target_counts_nonchild=None):
+        """
+        This method overwrites the one in parent class because only non-qbx targets
+        should be counted.
+        """
+        if box_target_counts_nonchild is None:
+            box_target_counts_nonchild = self.geo_data.non_qbx_box_target_lists()\
+                                             .box_target_counts_nonchild
 
-            start, end = traversal.neighbor_source_boxes_starts[itgt_box:itgt_box+2]
+        return super(QBXPerformanceCounter, self).count_m2p(
+            use_global_idx=use_global_idx,
+            box_target_counts_nonchild=box_target_counts_nonchild
+        )
 
-            for src_ibox in traversal.neighbor_source_boxes_lists[start:end]:
-                nsources += tree.box_source_counts_nonchild[src_ibox]
+    def count_eval_part(self, use_global_idx=False, box_target_counts_nonchild=None):
+        """
+        This method overwrites the one in parent class because only non-qbx targets
+        should be counted.
+        """
+        if box_target_counts_nonchild is None:
+            box_target_counts_nonchild = self.geo_data.non_qbx_box_target_lists()\
+                                             .box_target_counts_nonchild
 
-            if traversal.from_sep_close_smaller_starts is not None:
-                start, end = (
-                    traversal.from_sep_close_smaller_starts[itgt_box:itgt_box+2])
-
-                for src_ibox in traversal.from_sep_close_smaller_lists[start:end]:
-                    nsources += tree.box_source_counts_nonchild[src_ibox]
-
-            if traversal.from_sep_close_bigger_starts is not None:
-                start, end = (
-                    traversal.from_sep_close_bigger_starts[itgt_box:itgt_box+2])
-
-                for src_ibox in traversal.from_sep_close_bigger_lists[start:end]:
-                    nsources += tree.box_source_counts_nonchild[src_ibox]
-
-            count = nsources * ntargets
-
-            if use_global_idx:
-                direct_workload[tgt_ibox] = count
-            else:
-                direct_workload[itgt_box] = count
-
-        return direct_workload
+        return super(QBXPerformanceCounter, self).count_eval_part(
+            use_global_idx=use_global_idx,
+            box_target_counts_nonchild=box_target_counts_nonchild
+        )
 
     def count_p2qbxl(self, use_global_idx=False):
         geo_data = self.geo_data
