@@ -143,7 +143,8 @@ class QBXDistributedFMMLibExpansionWrangler(
 # {{{ Distributed GeoData
 
 class DistributedGeoData(object):
-    def __init__(self, geo_data, queue, global_wrangler, comm=MPI.COMM_WORLD):
+    def __init__(self, geo_data, queue, global_wrangler, perf_model_file_path=None,
+                 comm=MPI.COMM_WORLD):
         self.comm = comm
         current_rank = comm.Get_rank()
         total_rank = comm.Get_size()
@@ -197,7 +198,10 @@ class DistributedGeoData(object):
             # FIXME: If the expansion wrangler is not FMMLib, the argument
             # 'uses_pde_expansions' might be different
 
-            model.load_default_model()
+            if perf_model_file_path is None:
+                model.load_default_model()
+            else:
+                model.loadjson(perf_model_file_path)
 
             boxes_time = model.predict_boxes_time(geo_data, global_wrangler)
 
@@ -611,6 +615,7 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
             to_refined_connection=None,
             expansion_factory=None,
             target_association_tolerance=_not_provided,
+            perf_model_file_path=None,
 
             # begin undocumented arguments
             # FIXME default debug=False once everything has matured
@@ -631,6 +636,7 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
         current_rank = self.comm.Get_rank()
 
         self.distributed_geo_data_cache = {}
+        self.perf_model_file_path = perf_model_file_path
 
         if current_rank == 0:
             self.next_geo_data_id = 0
@@ -714,6 +720,7 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
         obj.__class__ = DistributedQBXLayerPotentialSource
         obj.comm = self.comm
         obj.distributed_geo_data_cache = self.distributed_geo_data_cache
+        obj.perf_model_file_path = self.perf_model_file_path
 
         current_rank = self.comm.Get_rank()
 
@@ -753,7 +760,9 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
             host_geo_data = ToHostTransferredGeoDataWrapper(queue, geo_data)
 
             distributed_geo_data = DistributedGeoData(
-                host_geo_data, queue, wrangler, self.comm
+                host_geo_data, queue, wrangler,
+                perf_model_file_path=self.perf_model_file_path,
+                comm=self.comm
             )
 
         else:
