@@ -887,7 +887,7 @@ def drive_dfmm(queue, src_weights, distributed_geo_data, comm=MPI.COMM_WORLD,
 
     if local_traversal.from_sep_close_bigger_starts is not None:
         non_qbx_potentials = non_qbx_potentials + wrangler.eval_direct(
-            local_traversal.target_or_target_parent_boxes,
+            local_traversal.target_boxes,
             local_traversal.from_sep_close_bigger_starts,
             local_traversal.from_sep_close_bigger_lists,
             local_source_weights)[0]
