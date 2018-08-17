@@ -456,9 +456,9 @@ class QBXPerformanceModel(PerformanceModel):
             predict_time_field = predict_timing[field]
 
             if wall_time:
-                true_time_field = actual_timing[field].wall_elapsed
+                true_time_field = actual_timing[field]["wall_elapsed"]
             else:
-                true_time_field = actual_timing[field].process_elapsed
+                true_time_field = actual_timing[field]["process_elapsed"]
 
             diff = abs(predict_time_field - true_time_field)
 
