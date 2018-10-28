@@ -756,7 +756,7 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
 
         # no cached result found, construct a new distributed_geo_data
         if current_rank == 0:
-            from pytential.qbx.fmmlib import ToHostTransferredGeoDataWrapper
+            from pytential.qbx.utils import ToHostTransferredGeoDataWrapper
             host_geo_data = ToHostTransferredGeoDataWrapper(queue, geo_data)
 
             distributed_geo_data = DistributedGeoData(
