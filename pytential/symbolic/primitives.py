@@ -201,10 +201,10 @@ class DEFAULT_TARGET:  # noqa
     pass
 
 
-class _QBXSourceStage2(object):
-    """A symbolic 'where' specifier for the
-    :attr:`pytential.qbx.QBXLayerPotentialSource.stage2_density_discr`
-    of the layer potential source identified by :attr:`where`.
+class _QBXSource(object):
+    """A symbolic 'where' specifier for the a density of a
+    :attr:`pytential.qbx.QBXLayerPotentialSource`
+    layer potential source identified by :attr:`where`.
 
     .. attribute:: where
 
@@ -228,6 +228,27 @@ class _QBXSourceStage2(object):
 
     def __ne__(self, other):
         return not self.__eq__(other)
+
+
+class QBXSourceStage1(_QBXSource):
+    """An explicit symbolic 'where' specifier for the
+    :attr:`pytential.qbx.QBXLayerPotentialSource.density_discr`
+    of the layer potential source identified by :attr:`where`.
+    """
+
+
+class QBXSourceStage2(_QBXSource):
+    """A symbolic 'where' specifier for the
+    :attr:`pytential.qbx.QBXLayerPotentialSource.stage2_density_discr`
+    of the layer potential source identified by :attr:`where`.
+    """
+
+
+class QBXSourceQuadStage2(_QBXSource):
+    """A symbolic 'where' specifier for the
+    :attr:`pytential.qbx.QBXLayerPotentialSource.quad_stage2_density_discr`
+    of the layer potential source identified by :attr:`where`.
+    """
 
 # }}}
 
@@ -266,8 +287,7 @@ def make_sym_surface_mv(name, ambient_dim, dim, where=None):
 
     return sum(
             var("%s%d" % (name, i))
-            *
-            cse(MultiVector(vec), "tangent%d" % i, cse_scope.DISCRETIZATION)
+            * cse(MultiVector(vec), "tangent%d" % i, cse_scope.DISCRETIZATION)
             for i, vec in enumerate(par_grad.T))
 
 
@@ -328,6 +348,8 @@ class DiscretizationProperty(Expression):
     further arguments.
     """
 
+    init_arg_names = ("where",)
+
     def __init__(self, where=None):
         """
         :arg where: |where-blurb|
@@ -348,6 +370,9 @@ class QWeight(DiscretizationProperty):
 
 
 class NodeCoordinateComponent(DiscretizationProperty):
+
+    init_arg_names = ("ambient_axis", "where")
+
     def __init__(self, ambient_axis, where=None):
         """
         :arg where: |where-blurb|
@@ -378,12 +403,14 @@ class NumReferenceDerivative(DiscretizationProperty):
     reference coordinates.
     """
 
-    def __new__(cls, ref_axes, operand, where=None):
+    init_arg_names = ("ref_axes", "operand", "where")
+
+    def __new__(cls, ref_axes=None, operand=None, where=None):
         # If the constructor is handed a multivector object, return an
         # object array of the operator applied to each of the
         # coefficients in the multivector.
 
-        if isinstance(operand, (np.ndarray)):
+        if isinstance(operand, np.ndarray):
             def make_op(operand_i):
                 return cls(ref_axes, operand_i, where=where)
 
@@ -750,7 +777,10 @@ def _scaled_max_curvature(ambient_dim, dim=None, where=None):
 # {{{ operators
 
 class SingleScalarOperandExpression(Expression):
-    def __new__(cls, operand):
+
+    init_arg_names = ("operand",)
+
+    def __new__(cls, operand=None):
         # If the constructor is handed a multivector object, return an
         # object array of the operator applied to each of the
         # coefficients in the multivector.
@@ -792,7 +822,10 @@ def integral(ambient_dim, dim, operand, where=None):
 
 
 class SingleScalarOperandExpressionWithWhere(Expression):
-    def __new__(cls, operand, where=None):
+
+    init_arg_names = ("operand", "where")
+
+    def __new__(cls, operand=None, where=None):
         # If the constructor is handed a multivector object, return an
         # object array of the operator applied to each of the
         # coefficients in the multivector.
@@ -842,6 +875,8 @@ class Ones(Expression):
     discretization.
     """
 
+    init_arg_names = ("where",)
+
     def __init__(self, where=None):
         self.where = where
 
@@ -865,11 +900,13 @@ def area(ambient_dim, dim, where=None):
 def mean(ambient_dim, dim, operand, where=None):
     return (
             integral(ambient_dim, dim, operand, where)
-            /
-            area(ambient_dim, dim, where))
+            / area(ambient_dim, dim, where))
 
 
 class IterativeInverse(Expression):
+
+    init_arg_names = ("expression", "rhs", "variable_name", "extra_vars", "where")
+
     def __init__(self, expression, rhs, variable_name, extra_vars={},
             where=None):
         self.expression = expression
@@ -982,7 +1019,10 @@ class IntG(Expression):
     where :math:`\sigma` is *density*.
     """
 
-    def __new__(cls, kernel, density, *args, **kwargs):
+    init_arg_names = ("kernel", "density", "qbx_forced_limit", "source", "target",
+                      "kernel_arguments")
+
+    def __new__(cls, kernel=None, density=None, *args, **kwargs):
         # If the constructor is handed a multivector object, return an
         # object array of the operator applied to each of the
         # coefficients in the multivector.
@@ -1024,8 +1064,8 @@ class IntG(Expression):
         :arg kernel_arguments: A dictionary mapping named
             :class:`sumpy.kernel.Kernel` arguments
             (see :meth:`sumpy.kernel.Kernel.get_args`
-            and :meth:`sumpy.kernel.Kernel.get_source_args`
-            to expressions that determine them)
+            and :meth:`sumpy.kernel.Kernel.get_source_args`)
+            to expressions that determine them
 
         :arg source: The symbolic name of the source discretization. This name
             is bound to a concrete :class:`pytential.source.LayerPotentialSourceBase`
@@ -1063,8 +1103,7 @@ class IntG(Expression):
                 karg.loopy_arg.name
                 for karg in (
                     kernel.get_args()
-                    +
-                    kernel.get_source_args()))
+                    + kernel.get_source_args()))
 
         kernel_arguments = kernel_arguments.copy()
         if kwargs:
@@ -1114,6 +1153,11 @@ class IntG(Expression):
                 self.source, self.target,
                 hashable_kernel_args(self.kernel_arguments))
 
+    def __setstate__(self, state):
+        # Overwrite pymbolic.Expression.__setstate__
+        assert len(self.init_arg_names) == len(state), type(self)
+        self.__init__(*state)
+
     mapper_method = intern("map_int_g")
 
 
@@ -1130,7 +1174,7 @@ def _insert_source_derivative_into_kernel(kernel):
                 kernel, dir_vec_name=_DIR_VEC_NAME)
     else:
         return kernel.replace_inner_kernel(
-                _insert_source_derivative_into_kernel(kernel.kernel))
+                _insert_source_derivative_into_kernel(kernel.inner_kernel))
 
 
 def _get_dir_vec(dsource, ambient_dim):

@@ -166,8 +166,7 @@ def test_ellipse_eigenvalues(ctx_getter, ellipse_aspect, mode_nr, qbx_order,
 
         s_err = (
                 norm(density_discr, queue, s_sigma - s_sigma_ref)
-                /
-                norm(density_discr, queue, s_sigma_ref))
+                / norm(density_discr, queue, s_sigma_ref))
         s_eoc_rec.add_data_point(qbx.h_max, s_err)
 
         # }}}
@@ -198,8 +197,7 @@ def test_ellipse_eigenvalues(ctx_getter, ellipse_aspect, mode_nr, qbx_order,
 
         d_err = (
                 norm(density_discr, queue, d_sigma - d_sigma_ref)
-                /
-                d_ref_norm)
+                / d_ref_norm)
         d_eoc_rec.add_data_point(qbx.h_max, d_err)
 
         # }}}
@@ -218,8 +216,7 @@ def test_ellipse_eigenvalues(ctx_getter, ellipse_aspect, mode_nr, qbx_order,
 
             sp_err = (
                     norm(density_discr, queue, sp_sigma - sp_sigma_ref)
-                    /
-                    norm(density_discr, queue, sigma))
+                    / norm(density_discr, queue, sigma))
             sp_eoc_rec.add_data_point(qbx.h_max, sp_err)
 
             # }}}
@@ -252,7 +249,7 @@ def test_ellipse_eigenvalues(ctx_getter, ellipse_aspect, mode_nr, qbx_order,
     "sumpy",
     "fmmlib",
     ])
-def no_test_sphere_eigenvalues(ctx_getter, mode_m, mode_n, qbx_order,
+def test_sphere_eigenvalues(ctx_getter, mode_m, mode_n, qbx_order,
         fmm_backend):
     logging.basicConfig(level=logging.INFO)
 
@@ -277,8 +274,7 @@ def no_test_sphere_eigenvalues(ctx_getter, mode_m, mode_n, qbx_order,
     def rel_err(comp, ref):
         return (
                 norm(density_discr, queue, comp - ref)
-                /
-                norm(density_discr, queue, ref))
+                / norm(density_discr, queue, ref))
 
     for nrefinements in [0, 1]:
         from meshmode.mesh.generation import generate_icosphere

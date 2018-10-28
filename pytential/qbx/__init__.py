@@ -578,7 +578,7 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
             maxstretch = bind(
                     self, sym._simplex_mapping_max_stretch_factor(
                         self.ambient_dim,
-                        where=sym._QBXSourceStage2(sym.DEFAULT_SOURCE))
+                        where=sym.QBXSourceStage2(sym.DEFAULT_SOURCE))
                     )(queue)
             maxstretch = utils.to_last_dim_length(
                     self.stage2_density_discr, maxstretch, last_dim_length)
@@ -630,16 +630,19 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
 
     # {{{ internal functionality for execution
 
-    def exec_compute_potential_insn(self, queue, insn, bound_expr, evaluate):
+    def exec_compute_potential_insn(self, queue, insn, bound_expr, evaluate,
+            return_timing_data):
         if self.fmm_level_to_order is False:
             func = self.exec_compute_potential_insn_direct
         else:
             func = self.exec_compute_potential_insn_fmm
-        return self._dispatch_compute_potential_insn(
-                queue, insn, bound_expr, evaluate, func)
 
-    def perf_model_compute_potential_insn(self, queue, insn, bound_expr,
-            evaluate):
+        extra_args = {"return_timing_data": return_timing_data}
+
+        return self._dispatch_compute_potential_insn(
+                queue, insn, bound_expr, evaluate, func, extra_args)
+
+    def perf_model_compute_potential_insn(self, queue, insn, bound_expr, evaluate):
         if self.fmm_level_to_order is False:
             raise NotImplementedError("perf modeling direct evaluations")
         return self._dispatch_compute_potential_insn(
@@ -647,14 +650,14 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                 self.perf_model_compute_potential_insn_fmm)
 
     def _dispatch_compute_potential_insn(self, queue, insn, bound_expr,
-            evaluate, func):
+            evaluate, func, extra_args=None):
         from pytools.obj_array import with_object_array_or_scalar
 
         if not self._refined_for_global_qbx:
             from warnings import warn
             warn(
-                "Executing global QBX without refinement. "
-                "This is unlikely to work.")
+                    "Executing global QBX without refinement. "
+                    "This is unlikely to work.")
 
         def oversample_nonscalars(vec):
             from numbers import Number
@@ -667,8 +670,10 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
             value = evaluate(expr)
             return with_object_array_or_scalar(oversample_nonscalars, value)
 
-        return func(queue, insn, bound_expr, evaluate_wrapper,
-                    timing_data=evaluate.timing_data)
+        if extra_args is None:
+            extra_args = {}
+
+        return func(queue, insn, bound_expr, evaluate_wrapper, **extra_args)
 
     @property
     @memoize_method
@@ -743,7 +748,7 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
     # {{{ execute fmm performance model
 
     def perf_model_compute_potential_insn_fmm(self, queue, insn, bound_expr,
-                                              evaluate):
+            evaluate):
         target_name_and_side_to_number, target_discrs_and_qbx_sides = (
                 self.get_target_discrs_and_qbx_sides(insn, bound_expr))
 
@@ -781,8 +786,7 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
 
             result.append((o.name, output_array))
 
-        new_futures = []
-        return result, new_futures, performance_model_result
+        return result, performance_model_result
 
         # }}}
 
@@ -791,7 +795,7 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
     # {{{ execute fmm
 
     def exec_compute_potential_insn_fmm(self, queue, insn, bound_expr, evaluate,
-                                        timing_data={}):
+                                        return_timing_data):
         target_name_and_side_to_number, target_discrs_and_qbx_sides = (
                 self.get_target_discrs_and_qbx_sides(insn, bound_expr))
 
@@ -835,7 +839,7 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
         if self.geometry_data_inspector is not None:
             perform_fmm = self.geometry_data_inspector(insn, bound_expr, geo_data)
             if not perform_fmm:
-                return [(o.name, 0) for o in insn.outputs], []
+                return [(o.name, 0) for o in insn.outputs]
 
         if self.expansion_wrangler_inspector is not None:
             self.expansion_wrangler_inspector(wrangler)
@@ -844,6 +848,7 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
 
         # {{{ execute global QBX
 
+        timing_data = {} if return_timing_data else None
         if self.fmm_backend == 'distributed':
             distributed_geo_data = self.distibuted_geo_data(
                 geo_data, queue, wrangler
@@ -870,10 +875,7 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                 (o.name, all_potentials_on_every_tgt[o.kernel_index][target_slice])
             )
 
-        new_futures = []
-        return result, new_futures, timing_data
-
-    # }}}
+        return result, timing_data
 
     # }}}
 
@@ -931,7 +933,15 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                         *count = item;
                     """)
 
-    def exec_compute_potential_insn_direct(self, queue, insn, bound_expr, evaluate):
+    def exec_compute_potential_insn_direct(self, queue, insn, bound_expr, evaluate,
+            return_timing_data):
+        if return_timing_data:
+            from pytential.source import UnableToCollectTimingData
+            from warnings import warn
+            warn(
+                    "Timing data collection not supported.",
+                    category=UnableToCollectTimingData)
+
         lpot_applier = self.get_lpot_applier(insn.kernels)
         p2p = None
         lpot_applier_on_tgt_subset = None
@@ -1035,8 +1045,7 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                 result.append((o.name, output_for_each_kernel[o.kernel_index]))
 
         timing_data = {}
-        new_futures = []
-        return result, new_futures, timing_data
+        return result, timing_data
 
     # }}}
 

@@ -388,7 +388,7 @@ def add_dicts(dict1, dict2):
     return rtv
 
 
-def drive_fmm(expansion_wrangler, src_weights, timing_data=None):
+def drive_fmm(expansion_wrangler, src_weights, timing_data=None, traversal=None):
     """Top-level driver routine for the QBX fast multipole calculation.
 
     :arg geo_data: A :class:`QBXFMMGeometryData` instance.
@@ -406,8 +406,12 @@ def drive_fmm(expansion_wrangler, src_weights, timing_data=None):
     wrangler = expansion_wrangler
 
     geo_data = wrangler.geo_data
-    traversal = geo_data.traversal()
+
+    if traversal is None:
+        traversal = geo_data.traversal()
+
     tree = traversal.tree
+
     recorder = TimingRecorder()
 
     # Interface guidelines: Attributes of the tree are assumed to be known
@@ -581,6 +585,5 @@ def drive_fmm(expansion_wrangler, src_weights, timing_data=None):
     return result
 
 # }}}
-
 
 # vim: foldmethod=marker
