@@ -856,7 +856,9 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
 
             from pytential.qbx.distributed import drive_dfmm
             all_potentials_on_every_tgt = drive_dfmm(
-                queue, strengths, distributed_geo_data, comm=self.comm)
+                queue, strengths, distributed_geo_data, comm=self.comm,
+                record_timing=self.record_timing
+            )
         else:
             from pytential.qbx.fmm import drive_fmm
             all_potentials_on_every_tgt = drive_fmm(wrangler, strengths, timing_data)
