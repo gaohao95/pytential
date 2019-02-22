@@ -85,7 +85,6 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
             _tree_kind="adaptive",
             _use_target_specific_qbx=False,
             geometry_data_inspector=None,
-            expansion_wrangler_inspector=None,
             performance_model=None,
             cost_model=None,
             fmm_backend="sumpy",
@@ -208,7 +207,6 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
         self._tree_kind = _tree_kind
         self._use_target_specific_qbx = _use_target_specific_qbx
         self.geometry_data_inspector = geometry_data_inspector
-        self.expansion_wrangler_inspector = expansion_wrangler_inspector
         self.performance_model = performance_model
         self.cost_model = cost_model
 
@@ -234,7 +232,6 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
             _tree_kind=None,
             _use_target_specific_qbx=_not_provided,
             geometry_data_inspector=None,
-            expansion_wrangler_inspector=None,
             performance_model=_not_provided,
             cost_model=_not_provided,
             fmm_backend=None,
@@ -323,14 +320,6 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                     else self._use_target_specific_qbx),
                 geometry_data_inspector=(
                     geometry_data_inspector or self.geometry_data_inspector),
-                expansion_wrangler_inspector=(
-                    expansion_wrangler_inspector or self.expansion_wrangler_inspector
-                ),
-                performance_model=(
-                    # None is a valid value here
-                    performance_model
-                    if performance_model is not _not_provided
-                    else self.performance_model),
                 cost_model=(
                         # None is a valid value here
                         cost_model
@@ -861,9 +850,6 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
             if not perform_fmm:
                 return [(o.name, 0) for o in insn.outputs]
 
-        if self.expansion_wrangler_inspector is not None:
-            self.expansion_wrangler_inspector(wrangler)
-
         # }}}
 
         # {{{ execute global QBX
@@ -1088,14 +1074,6 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
 
         timing_data = {}
         return result, timing_data
-
-    # }}}
-
-    def bind_expansion_wrangler_inspector(self, inspector):
-        if self.expansion_wrangler_inspector is not None:
-            raise NotImplementedError("Cannot bind multiple inspectors.")
-
-        self.expansion_wrangler_inspector = inspector
 
     # }}}
 

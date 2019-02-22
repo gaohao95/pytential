@@ -619,7 +619,6 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
             _from_sep_smaller_crit=None,
             _tree_kind="adaptive",
             geometry_data_inspector=None,
-            expansion_wrangler_inspector=None,
             target_stick_out_factor=_not_provided):
 
         self.comm = comm
@@ -655,7 +654,6 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
                 _from_sep_smaller_min_nsources_cumul=0,
                 _tree_kind=_tree_kind,
                 geometry_data_inspector=geometry_data_inspector,
-                expansion_wrangler_inspector=expansion_wrangler_inspector,
                 fmm_backend='distributed',
                 target_stick_out_factor=target_stick_out_factor
             )
@@ -676,7 +674,6 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
             _from_sep_smaller_crit=None,
             _tree_kind=None,
             geometry_data_inspector=None,
-            expansion_wrangler_inspector=None,
             performance_model=_not_provided,
             fmm_backend=None,
 
@@ -700,7 +697,6 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
             _from_sep_smaller_crit=_from_sep_smaller_crit,
             _tree_kind=_tree_kind,
             geometry_data_inspector=geometry_data_inspector,
-            expansion_wrangler_inspector=expansion_wrangler_inspector,
             fmm_backend=fmm_backend,
 
             debug=debug,
