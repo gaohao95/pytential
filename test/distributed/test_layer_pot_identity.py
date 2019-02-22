@@ -168,7 +168,7 @@ if current_rank == 0:
 else:
     while True:
         lp_source = DistributedQBXLayerPotentialSource(comm, None, None)
-        distribute_geo_data = lp_source.distibuted_geo_data(None, queue, None)
+        distribute_geo_data = lp_source.distibuted_geo_data(None, queue, None, None)
 
         from pytential.qbx.distributed import drive_dfmm
         wrangler = None

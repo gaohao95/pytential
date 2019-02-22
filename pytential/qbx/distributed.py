@@ -144,7 +144,7 @@ class QBXDistributedFMMLibExpansionWrangler(
 # {{{ Distributed GeoData
 
 class DistributedGeoData(object):
-    def __init__(self, geo_data, queue, global_wrangler, perf_model_file_path=None,
+    def __init__(self, geo_data, queue, global_wrangler, boxes_time,
                  comm=MPI.COMM_WORLD):
         self.comm = comm
         current_rank = comm.Get_rank()
@@ -194,18 +194,6 @@ class DistributedGeoData(object):
         # }}}
 
         if current_rank == 0:
-            from pytential.qbx.perf_model import QBXPerformanceModel
-            model = QBXPerformanceModel(queue.context, True)
-            # FIXME: If the expansion wrangler is not FMMLib, the argument
-            # 'uses_pde_expansions' might be different
-
-            if perf_model_file_path is None:
-                model.load_default_model()
-            else:
-                model.loadjson(perf_model_file_path)
-
-            boxes_time = model.predict_boxes_time(geo_data, global_wrangler)
-
             from boxtree.distributed.partition import partition_work
             responsible_boxes_list = partition_work(
                 boxes_time, traversal, comm.Get_size()
@@ -616,7 +604,7 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
             to_refined_connection=None,
             expansion_factory=None,
             target_association_tolerance=_not_provided,
-            perf_model_file_path=None,
+            cost_model=None,
             record_timing=False,
 
             # begin undocumented arguments
@@ -638,7 +626,7 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
         current_rank = self.comm.Get_rank()
 
         self.distributed_geo_data_cache = {}
-        self.perf_model_file_path = perf_model_file_path
+        self.cost_model = cost_model
         self.record_timing = record_timing
 
         if current_rank == 0:
@@ -723,7 +711,7 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
         obj.__class__ = DistributedQBXLayerPotentialSource
         obj.comm = self.comm
         obj.distributed_geo_data_cache = self.distributed_geo_data_cache
-        obj.perf_model_file_path = self.perf_model_file_path
+        obj.cost_model = self.cost_model
         obj.record_timing = self.record_timing
 
         current_rank = self.comm.Get_rank()
@@ -734,7 +722,7 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
 
         return obj
 
-    def distibuted_geo_data(self, geo_data, queue, wrangler):
+    def distibuted_geo_data(self, geo_data, queue, wrangler, boxes_time):
         """ Note: This method needs to be called collectively by all processes of
         self.comm
         """
@@ -764,13 +752,13 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
             host_geo_data = ToHostTransferredGeoDataWrapper(queue, geo_data)
 
             distributed_geo_data = DistributedGeoData(
-                host_geo_data, queue, wrangler,
-                perf_model_file_path=self.perf_model_file_path,
-                comm=self.comm
+                host_geo_data, queue, wrangler, boxes_time, comm=self.comm
             )
 
         else:
-            distributed_geo_data = DistributedGeoData(None, queue, None, self.comm)
+            distributed_geo_data = DistributedGeoData(
+                None, queue, None, None, self.comm
+            )
 
         self.distributed_geo_data_cache[geo_data_id] = distributed_geo_data
 

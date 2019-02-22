@@ -870,8 +870,28 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
 
         timing_data = {} if return_timing_data else None
         if self.fmm_backend == 'distributed':
+            # FIXME: If the expansion wrangler is not FMMLib, the argument
+            # 'uses_pde_expansions' might be different
+            if self.cost_model is None:
+                from pytential.qbx.cost import CLQBXCostModel
+                cost_model = CLQBXCostModel(
+                    queue, CLQBXCostModel.get_constantone_calibration_params()
+                )
+            else:
+                cost_model = self.cost_model
+
+            kernel_args = {}
+            for arg_name, arg_expr in six.iteritems(insn.kernel_arguments):
+                kernel_args[arg_name] = evaluate(arg_expr)
+
+            boxes_time = cost_model.aggregate_stage_costs_per_box(
+                geo_data.traversal(), cost_model.get_qbx_modeled_cost(
+                    geo_data, insn.base_kernel, kernel_args
+                )
+            ).get()
+
             distributed_geo_data = self.distibuted_geo_data(
-                geo_data, queue, wrangler
+                geo_data, queue, wrangler, boxes_time
             )
 
             from pytential.qbx.distributed import drive_dfmm
