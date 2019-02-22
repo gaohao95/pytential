@@ -520,9 +520,9 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
     @memoize_method
     def _expansion_radii(self, last_dim_length):
         with cl.CommandQueue(self.cl_context) as queue:
-                return (self._coarsest_quad_resolution(last_dim_length)
-                        .with_queue(queue)
-                        * 0.5 * self._dim_fudge_factor()).with_queue(None)
+            return (self._coarsest_quad_resolution(last_dim_length)
+                    .with_queue(queue)
+                    * 0.5 * self._dim_fudge_factor()).with_queue(None)
 
     # _expansion_radii should not be needed for the fine discretization
 
@@ -550,10 +550,10 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
     @memoize_method
     def _close_target_tunnel_radius(self, last_dim_length):
         with cl.CommandQueue(self.cl_context) as queue:
-                return (
-                        self._expansion_radii(last_dim_length).with_queue(queue)
-                        * 0.5
-                        ).with_queue(None)
+            return (
+                    self._expansion_radii(last_dim_length).with_queue(queue)
+                    * 0.5
+                    ).with_queue(None)
 
     @memoize_method
     def _coarsest_quad_resolution(self, last_dim_length="npanels"):
@@ -769,8 +769,8 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
         geo_data = self.qbx_fmm_geometry_data(target_discrs_and_qbx_sides)
 
         if self.cost_model is None:
-            from pytential.qbx.cost import CostModel
-            cost_model = CostModel()
+            from pytential.qbx.cost import CLQBXCostModel
+            cost_model = CLQBXCostModel(cl.CommandQueue(self.cl_context))
         else:
             cost_model = self.cost_model
 
