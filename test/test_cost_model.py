@@ -32,7 +32,11 @@ import pytest
 from pyopencl.tools import (  # noqa
         pytest_generate_tests_for_pyopencl as pytest_generate_tests)
 
+from pytools import one
+from sumpy.kernel import LaplaceKernel, HelmholtzKernel
+
 from pytential import bind, sym, norm  # noqa
+from pytential.qbx.cost import CostModel
 
 
 # {{{ global params
@@ -105,7 +109,6 @@ def test_timing_data_gathering(ctx_getter):
     lpot_source = get_lpot_source(queue, 2)
     sigma = get_density(queue, lpot_source)
 
-    from sumpy.kernel import LaplaceKernel
     sigma_sym = sym.var("sigma")
     k_sym = LaplaceKernel(lpot_source.ambient_dim)
     sym_op_S = sym.S(k_sym, sigma_sym, qbx_forced_limit=+1)
@@ -120,31 +123,73 @@ def test_timing_data_gathering(ctx_getter):
 # }}}
 
 
-# {{{ test performance model
+# {{{ test cost model
 
 @pytest.mark.parametrize("dim", (2, 3))
-def test_performance_model(ctx_getter, dim):
+def test_cost_model(ctx_getter, dim):
     cl_ctx = ctx_getter()
     queue = cl.CommandQueue(cl_ctx)
 
     lpot_source = get_lpot_source(queue, dim)
     sigma = get_density(queue, lpot_source)
 
-    from sumpy.kernel import LaplaceKernel
     sigma_sym = sym.var("sigma")
     k_sym = LaplaceKernel(lpot_source.ambient_dim)
 
     sym_op_S = sym.S(k_sym, sigma_sym, qbx_forced_limit=+1)
     op_S = bind(lpot_source, sym_op_S)
-    perf_S = op_S.get_modeled_performance(queue, sigma=sigma)
+    perf_S = op_S.get_modeled_cost(queue, sigma=sigma)
     assert len(perf_S) == 1
 
     sym_op_S_plus_D = (
             sym.S(k_sym, sigma_sym, qbx_forced_limit=+1)
             + sym.D(k_sym, sigma_sym))
     op_S_plus_D = bind(lpot_source, sym_op_S_plus_D)
-    perf_S_plus_D = op_S_plus_D.get_modeled_performance(queue, sigma=sigma)
+    perf_S_plus_D = op_S_plus_D.get_modeled_cost(queue, sigma=sigma)
     assert len(perf_S_plus_D) == 2
+
+# }}}
+
+
+# {{{ test cost model parameter gathering
+
+def test_cost_model_parameter_gathering(ctx_getter):
+    cl_ctx = ctx_getter()
+    queue = cl.CommandQueue(cl_ctx)
+
+    from sumpy.expansion.level_to_order import SimpleExpansionOrderFinder
+
+    fmm_level_to_order = SimpleExpansionOrderFinder(tol=1e-5)
+
+    lpot_source = get_lpot_source(queue, 2).copy(
+            fmm_level_to_order=fmm_level_to_order)
+
+    sigma = get_density(queue, lpot_source)
+
+    sigma_sym = sym.var("sigma")
+    k_sym = HelmholtzKernel(2, "k")
+    k = 2
+
+    sym_op_S = sym.S(k_sym, sigma_sym, qbx_forced_limit=+1, k=sym.var("k"))
+    op_S = bind(lpot_source, sym_op_S)
+
+    perf_S = one(op_S.get_modeled_cost(queue, sigma=sigma, k=k).values())
+
+    geo_data = lpot_source.qbx_fmm_geometry_data(
+            target_discrs_and_qbx_sides=((lpot_source.density_discr, 1),))
+
+    tree = geo_data.tree()
+
+    assert perf_S.params["p_qbx"] == QBX_ORDER
+    assert perf_S.params["nlevels"] == tree.nlevels
+    assert perf_S.params["nsources"] == tree.nsources
+    assert perf_S.params["ntargets"] == tree.ntargets
+    assert perf_S.params["ncenters"] == geo_data.ncenters
+
+    for level in range(tree.nlevels):
+        assert (
+                perf_S.params["p_fmm_lev%d" % level]
+                == fmm_level_to_order(k_sym, {"k": 2}, tree, level))
 
 # }}}
 
@@ -153,12 +198,13 @@ def test_performance_model(ctx_getter, dim):
 
 class ConstantOneQBXExpansionWrangler(ConstantOneExpansionWrangler):
 
-    def __init__(self, queue, geo_data):
+    def __init__(self, queue, geo_data, use_target_specific_qbx):
         from pytential.qbx.utils import ToHostTransferredGeoDataWrapper
         geo_data = ToHostTransferredGeoDataWrapper(queue, geo_data)
 
         self.geo_data = geo_data
         self.trav = geo_data.traversal()
+        self.use_target_specific_qbx = use_target_specific_qbx
 
         ConstantOneExpansionWrangler.__init__(self, geo_data.tree())
 
@@ -188,10 +234,13 @@ class ConstantOneQBXExpansionWrangler(ConstantOneExpansionWrangler):
         local_exps = self.qbx_local_expansion_zeros()
         ops = 0
 
+        if self.use_target_specific_qbx:
+            return local_exps, self.timing_future(ops)
+
         global_qbx_centers = self.geo_data.global_qbx_centers()
         qbx_center_to_target_box = self.geo_data.qbx_center_to_target_box()
 
-        for itgt_center, tgt_icenter in enumerate(global_qbx_centers):
+        for tgt_icenter in global_qbx_centers:
             itgt_box = qbx_center_to_target_box[tgt_icenter]
 
             start, end = (
@@ -265,43 +314,96 @@ class ConstantOneQBXExpansionWrangler(ConstantOneExpansionWrangler):
 
         return output, self.timing_future(ops)
 
+    def eval_target_specific_qbx_locals(self, src_weights):
+        pot = self.full_output_zeros()
+        ops = 0
+
+        if not self.use_target_specific_qbx:
+            return pot, self.timing_future(ops)
+
+        global_qbx_centers = self.geo_data.global_qbx_centers()
+        center_to_tree_targets = self.geo_data.center_to_tree_targets()
+        qbx_center_to_target_box = self.geo_data.qbx_center_to_target_box()
+
+        for ictr in global_qbx_centers:
+            tgt_ibox = qbx_center_to_target_box[ictr]
+
+            ictr_tgt_start, ictr_tgt_end = center_to_tree_targets.starts[ictr:ictr+2]
+
+            for ictr_tgt in range(ictr_tgt_start, ictr_tgt_end):
+                ctr_itgt = center_to_tree_targets.lists[ictr_tgt]
+
+                isrc_box_start, isrc_box_end = (
+                        self.trav.neighbor_source_boxes_starts[tgt_ibox:tgt_ibox+2])
+
+                for isrc_box in range(isrc_box_start, isrc_box_end):
+                    src_ibox = self.trav.neighbor_source_boxes_lists[isrc_box]
+
+                    isrc_start = self.tree.box_source_starts[src_ibox]
+                    isrc_end = (isrc_start
+                            + self.tree.box_source_counts_nonchild[src_ibox])
+
+                    pot[0][ctr_itgt] += sum(src_weights[isrc_start:isrc_end])
+                    ops += isrc_end - isrc_start
+
+        return pot, self.timing_future(ops)
+
 # }}}
 
 
-# {{{ verify performance model
+# {{{ verify cost model
 
-CONSTANT_ONE_PARAMS = dict(
-        p_qbx=1,
-        p_fmm=1,
-        c_l2l=1,
-        c_l2p=1,
-        c_l2qbxl=1,
-        c_m2l=1,
-        c_m2m=1,
-        c_m2p=1,
-        c_m2qbxl=1,
-        c_p2l=1,
-        c_p2m=1,
-        c_p2p=1,
-        c_p2qbxl=1,
-        c_qbxl2p=1,
-        )
+class OpCountingTranslationCostModel(object):
+    """A translation cost model which assigns at cost of 1 to each operation."""
+
+    def __init__(self, dim, nlevels):
+        pass
+
+    @staticmethod
+    def direct():
+        return 1
+
+    p2qbxl = direct
+    p2p_tsqbx = direct
+    qbxl2p = direct
+
+    @staticmethod
+    def p2l(level):
+        return 1
+
+    l2p = p2l
+    p2m = p2l
+    m2p = p2l
+    m2qbxl = p2l
+    l2qbxl = p2l
+
+    @staticmethod
+    def m2m(src_level, tgt_level):
+        return 1
+
+    l2l = m2m
+    m2l = m2m
 
 
-@pytest.mark.parametrize("dim", (2, 3))
-@pytest.mark.parametrize("off_surface", (True, False))
-def test_performance_model_correctness(ctx_getter, dim, off_surface):
+@pytest.mark.parametrize("dim, off_surface, use_target_specific_qbx", (
+        (2, False, False),
+        (2, True,  False),
+        (3, False, False),
+        (3, False, True),
+        (3, True,  False),
+        (3, True,  True)))
+def test_cost_model_correctness(ctx_getter, dim, off_surface,
+        use_target_specific_qbx):
     cl_ctx = ctx_getter()
     queue = cl.CommandQueue(cl_ctx)
 
-    from pytential.qbx.performance import PerformanceModel
+    perf_model = (
+            CostModel(
+                translation_cost_model_factory=OpCountingTranslationCostModel))
 
-    # We set uses_pde_expansions=False, so that a translation is modeled as
-    # simply costing nsrc_coeffs * ntgt_coeffs. By adjusting the symbolic
-    # parameters to equal 1 (done below), this provides a straightforward way
-    # to obtain the raw operation count for each FMM stage.
     lpot_source = get_lpot_source(queue, dim).copy(
-            performance_model=PerformanceModel(uses_pde_expansions=False))
+            cost_model=perf_model,
+            _use_target_specific_qbx=use_target_specific_qbx)
 
     # Construct targets.
     if off_surface:
@@ -317,8 +419,7 @@ def test_performance_model_correctness(ctx_getter, dim, off_surface):
         target_discrs_and_qbx_sides = ((targets, 1),)
         qbx_forced_limit = 1
 
-    # Construct bound op, run performance model.
-    from sumpy.kernel import LaplaceKernel
+    # Construct bound op, run cost model.
     sigma_sym = sym.var("sigma")
     k_sym = LaplaceKernel(lpot_source.ambient_dim)
     sym_op_S = sym.S(k_sym, sigma_sym, qbx_forced_limit=qbx_forced_limit)
@@ -327,9 +428,7 @@ def test_performance_model_correctness(ctx_getter, dim, off_surface):
     sigma = get_density(queue, lpot_source)
 
     from pytools import one
-    perf_S = one(op_S.get_modeled_performance(queue, sigma=sigma).values())
-    # Set all parameters equal to 1, to obtain raw op counts.
-    perf_S = perf_S.with_params(CONSTANT_ONE_PARAMS)
+    perf_S = one(op_S.get_modeled_cost(queue, sigma=sigma).values())
 
     # Run FMM with ConstantOneWrangler. This can't be done with pytential's
     # high-level interface, so call the FMM driver directly.
@@ -337,7 +436,8 @@ def test_performance_model_correctness(ctx_getter, dim, off_surface):
     geo_data = lpot_source.qbx_fmm_geometry_data(
             target_discrs_and_qbx_sides=target_discrs_and_qbx_sides)
 
-    wrangler = ConstantOneQBXExpansionWrangler(queue, geo_data)
+    wrangler = ConstantOneQBXExpansionWrangler(
+            queue, geo_data, use_target_specific_qbx)
     nnodes = lpot_source.quad_stage2_density_discr.nnodes
     src_weights = np.ones(nnodes)
 
@@ -350,7 +450,7 @@ def test_performance_model_correctness(ctx_getter, dim, off_surface):
 
     modeled_time = perf_S.get_predicted_times(merge_close_lists=True)
 
-    # Check that the performance model matches the timing data returned by the
+    # Check that the cost model matches the timing data returned by the
     # constant one wrangler.
     mismatches = []
     for stage in timing_data:
@@ -363,8 +463,76 @@ def test_performance_model_correctness(ctx_getter, dim, off_surface):
 # }}}
 
 
+# {{{ test order varying by level
+
+CONSTANT_ONE_PARAMS = dict(
+        c_l2l=1,
+        c_l2p=1,
+        c_l2qbxl=1,
+        c_m2l=1,
+        c_m2m=1,
+        c_m2p=1,
+        c_m2qbxl=1,
+        c_p2l=1,
+        c_p2m=1,
+        c_p2p=1,
+        c_p2qbxl=1,
+        c_qbxl2p=1,
+        c_p2p_tsqbx=1,
+        )
+
+
+def test_cost_model_order_varying_by_level(ctx_getter):
+    cl_ctx = ctx_getter()
+    queue = cl.CommandQueue(cl_ctx)
+
+    # {{{ constant level to order
+
+    def level_to_order_constant(kernel, kernel_args, tree, level):
+        return 1
+
+    lpot_source = get_lpot_source(queue, 2).copy(
+            cost_model=CostModel(
+                calibration_params=CONSTANT_ONE_PARAMS),
+            fmm_level_to_order=level_to_order_constant)
+
+    sigma_sym = sym.var("sigma")
+
+    k_sym = LaplaceKernel(2)
+    sym_op = sym.S(k_sym, sigma_sym, qbx_forced_limit=+1)
+
+    sigma = get_density(queue, lpot_source)
+
+    perf_constant = one(
+            bind(lpot_source, sym_op)
+            .get_modeled_cost(queue, sigma=sigma).values())
+
+    # }}}
+
+    # {{{ varying level to order
+
+    varying_order_params = perf_constant.params.copy()
+
+    nlevels = perf_constant.params["nlevels"]
+    for level in range(nlevels):
+        varying_order_params["p_fmm_lev%d" % level] = nlevels - level
+
+    perf_varying = perf_constant.with_params(varying_order_params)
+
+    # }}}
+
+    # This only checks to ensure that the costs are different. The varying-level
+    # case should have larger cost.
+
+    assert (
+            sum(perf_varying.get_predicted_times().values())
+            > sum(perf_constant.get_predicted_times().values()))
+
+# }}}
+
+
 # You can test individual routines by typing
-# $ python test_performance_model.py 'test_routine()'
+# $ python test_cost_model.py 'test_routine()'
 
 if __name__ == "__main__":
     import sys

@@ -9,7 +9,7 @@ Python 2.7 POCL:
   - export PY_EXE=python2.7
   - export PYOPENCL_TEST=portable
   - export PYTEST_ADDOPTS=${PYTEST_ADDOPTS:--k-slowtest}
-  - export EXTRA_INSTALL="pybind11 numpy scipy mako"
+  - export EXTRA_INSTALL="Cython pybind11 numpy scipy mako"
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project.sh
   - ". ./build-and-test-py-project.sh"
   tags:
@@ -25,7 +25,7 @@ Python 3.6 POCL:
   - export PY_EXE=python3.6
   - export PYOPENCL_TEST=portable
   - export PYTEST_ADDOPTS=${PYTEST_ADDOPTS:--k-slowtest}
-  - export EXTRA_INSTALL="pybind11 numpy scipy mako"
+  - export EXTRA_INSTALL="Cython pybind11 numpy scipy mako"
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project.sh
   - ". ./build-and-test-py-project.sh"
   tags:
@@ -41,7 +41,7 @@ Python 3.6 POCL Examples:
   - test -n "$SKIP_EXAMPLES" && exit
   - export PY_EXE=python3.6
   - export PYOPENCL_TEST=portable
-  - export EXTRA_INSTALL="pybind11 numpy mako pyvisfile matplotlib"
+  - export EXTRA_INSTALL="Cython pybind11 numpy mako pyvisfile matplotlib"
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-py-project-and-run-examples.sh
   - ". ./build-py-project-and-run-examples.sh"
   tags:
@@ -74,6 +74,8 @@ Python 3.6 Conda Apple:
   - export CONDA_ENVIRONMENT=.test-conda-env-py3-macos.yml
   - export PYTEST_ADDOPTS=${PYTEST_ADDOPTS:--k-slowtest}
   - export REQUIREMENTS_TXT=.test-conda-env-py3-requirements.txt
+  - export CC=gcc
+  - set -o xtrace
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project-within-miniconda.sh
   - ". ./build-and-test-py-project-within-miniconda.sh"
 
@@ -89,7 +91,7 @@ Python 3.6 Conda Apple:
 
 Documentation:
   script:
-  - EXTRA_INSTALL="pybind11 numpy mako"
+  - EXTRA_INSTALL="Cython pybind11 numpy mako"
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-docs.sh
   - ". ./build-docs.sh"
   tags:

@@ -33,11 +33,12 @@ This set of instructions is intended for 64-bit Linux and macOS computers.
 
 #.  (*macOS only*) ``conda install osx-pocl-opencl pocl pyopencl``
 
-#.  ``conda install git pip pocl islpy pyopencl sympy pyfmmlib pytest``
+#.  ``conda install gcc cython git pip pocl islpy pyopencl sympy pyfmmlib pytest``
 
-#.  Type the following command::
+#.  Type the following commands::
 
-        hash -r; for i in pymbolic cgen genpy gmsh_interop modepy pyvisfile loopy boxtree sumpy meshmode pytential; do python -m pip install git+https://github.com/inducer/$i; done
+        hash -r; for i in pymbolic cgen genpy gmsh_interop modepy pyvisfile loopy boxtree sumpy meshmode; do python -m pip install git+https://github.com/inducer/$i; done
+        CC=gcc python -m pip install git+https://gitlab.tiker.net/inducer/pytential@tsqbx
 
 Next time you want to use :mod:`pytential`, just run the following command::
 

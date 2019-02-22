@@ -91,12 +91,14 @@ class QBXSumpyExpansionWranglerCodeContainer(SumpyExpansionWranglerCodeContainer
     def get_wrangler(self, queue, geo_data, dtype,
             qbx_order, fmm_level_to_order,
             source_extra_kwargs={},
-            kernel_extra_kwargs=None):
+            kernel_extra_kwargs=None,
+            _use_target_specific_qbx=False):
         return QBXExpansionWrangler(self, queue, geo_data,
                 dtype,
                 qbx_order, fmm_level_to_order,
                 source_extra_kwargs,
-                kernel_extra_kwargs)
+                kernel_extra_kwargs,
+                _use_target_specific_qbx)
 
 
 class QBXExpansionWrangler(SumpyExpansionWrangler):
@@ -120,7 +122,11 @@ QBXFMMGeometryData.non_qbx_box_target_lists`),
 
     def __init__(self, code_container, queue, geo_data, dtype,
             qbx_order, fmm_level_to_order,
-            source_extra_kwargs, kernel_extra_kwargs):
+            source_extra_kwargs, kernel_extra_kwargs,
+            _use_target_specific_qbx=False):
+        if _use_target_specific_qbx:
+            raise ValueError("TSQBX is not implemented in sumpy")
+
         SumpyExpansionWrangler.__init__(self,
                 code_container, queue, geo_data.tree(),
                 dtype, fmm_level_to_order, source_extra_kwargs, kernel_extra_kwargs)
@@ -198,10 +204,11 @@ QBXFMMGeometryData.non_qbx_box_target_lists`),
     @log_process(logger)
     def form_global_qbx_locals(self, src_weights):
         local_exps = self.qbx_local_expansion_zeros()
+        events = []
 
         geo_data = self.geo_data
         if len(geo_data.global_qbx_centers()) == 0:
-            return local_exps
+            return (local_exps, SumpyTimingFuture(self.queue, events))
 
         traversal = geo_data.traversal()
 
@@ -227,24 +234,24 @@ QBXFMMGeometryData.non_qbx_box_target_lists`),
 
                 **kwargs)
 
+        events.append(evt)
         assert local_exps is result
         result.add_event(evt)
 
-        return (result, SumpyTimingFuture(self.queue, [evt]))
+        return (result, SumpyTimingFuture(self.queue, events))
 
     @log_process(logger)
     def translate_box_multipoles_to_qbx_local(self, multipole_exps):
         qbx_expansions = self.qbx_local_expansion_zeros()
+        events = []
 
         geo_data = self.geo_data
         if geo_data.ncenters == 0:
-            return qbx_expansions
+            return (qbx_expansions, SumpyTimingFuture(self.queue, events))
 
         traversal = geo_data.traversal()
 
         wait_for = multipole_exps.events
-
-        events = []
 
         for isrc_level, ssn in enumerate(traversal.from_sep_smaller_by_level):
             m2qbxl = self.code.m2qbxl(
@@ -277,7 +284,6 @@ QBXFMMGeometryData.non_qbx_box_target_lists`),
                     **self.kernel_extra_kwargs)
 
             events.append(evt)
-
             wait_for = [evt]
             assert qbx_expansions_res is qbx_expansions
 
@@ -290,13 +296,14 @@ QBXFMMGeometryData.non_qbx_box_target_lists`),
         qbx_expansions = self.qbx_local_expansion_zeros()
 
         geo_data = self.geo_data
+        events = []
+
         if geo_data.ncenters == 0:
-            return qbx_expansions
+            return (qbx_expansions, SumpyTimingFuture(self.queue, events))
+
         trav = geo_data.traversal()
 
         wait_for = local_exps.events
-
-        events = []
 
         for isrc_level in range(geo_data.tree().nlevels):
             l2qbxl = self.code.l2qbxl(
@@ -326,7 +333,6 @@ QBXFMMGeometryData.non_qbx_box_target_lists`),
                     **self.kernel_extra_kwargs)
 
             events.append(evt)
-
             wait_for = [evt]
             assert qbx_expansions_res is qbx_expansions
 
@@ -339,8 +345,10 @@ QBXFMMGeometryData.non_qbx_box_target_lists`),
         pot = self.full_output_zeros()
 
         geo_data = self.geo_data
+        events = []
+
         if len(geo_data.global_qbx_centers()) == 0:
-            return pot
+            return (pot, SumpyTimingFuture(self.queue, events))
 
         ctt = geo_data.center_to_tree_targets()
 
@@ -365,7 +373,11 @@ QBXFMMGeometryData.non_qbx_box_target_lists`),
         for pot_i, pot_res_i in zip(pot, pot_res):
             assert pot_i is pot_res_i
 
-        return (pot, SumpyTimingFuture(self.queue, [evt]))
+        return (pot, SumpyTimingFuture(self.queue, events))
+
+    @log_process(logger)
+    def eval_target_specific_qbx_locals(self, src_weights):
+        raise NotImplementedError()
 
     # }}}
 
@@ -406,6 +418,8 @@ def drive_fmm(expansion_wrangler, src_weights, timing_data=None, traversal=None)
     wrangler = expansion_wrangler
 
     geo_data = wrangler.geo_data
+
+    use_tsqbx = geo_data.lpot_source._use_target_specific_qbx
 
     if traversal is None:
         traversal = geo_data.traversal()
@@ -531,9 +545,12 @@ def drive_fmm(expansion_wrangler, src_weights, timing_data=None, traversal=None)
 
     # {{{ wrangle qbx expansions
 
-    qbx_expansions, timing_future = wrangler.form_global_qbx_locals(src_weights)
+    if not use_tsqbx:
+        qbx_expansions, timing_future = wrangler.form_global_qbx_locals(src_weights)
 
-    recorder.add("form_global_qbx_locals", timing_future)
+        recorder.add("form_global_qbx_locals", timing_future)
+    else:
+        qbx_expansions = wrangler.qbx_local_expansion_zeros()
 
     local_result, timing_future = (
             wrangler.translate_box_multipoles_to_qbx_local(mpole_exps))
@@ -552,6 +569,14 @@ def drive_fmm(expansion_wrangler, src_weights, timing_data=None, traversal=None)
     qbx_potentials, timing_future = wrangler.eval_qbx_expansions(qbx_expansions)
 
     recorder.add("eval_qbx_expansions", timing_future)
+
+    if use_tsqbx:
+        tsqbx_result, timing_future = (
+                wrangler.eval_target_specific_qbx_locals(src_weights))
+
+        recorder.add("eval_target_specific_qbx_locals", timing_future)
+
+        qbx_potentials = qbx_potentials + tsqbx_result
 
     # }}}
 
