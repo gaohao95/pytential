@@ -471,7 +471,8 @@ class DistributedGeoData(object):
 
                 # }}}
 
-            MPI.Request.Waitall(reqs)
+            for req in reqs:
+                req.wait()
 
             local_centers = local_centers[0]
             local_global_qbx_centers = local_global_qbx_centers[0]
