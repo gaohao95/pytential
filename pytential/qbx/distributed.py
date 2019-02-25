@@ -1,6 +1,3 @@
-import mpi4py
-mpi4py.rc.recv_mprobe = False
-
 from pytential.qbx.fmmlib import QBXFMMLibExpansionWrangler
 from pytential.qbx import QBXLayerPotentialSource, _not_provided
 from boxtree.distributed.calculation import DistributedFMMLibExpansionWrangler
