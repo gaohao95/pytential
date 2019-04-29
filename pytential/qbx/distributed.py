@@ -9,7 +9,6 @@ import pyopencl as cl
 import logging
 import time
 from boxtree.tools import return_timing_data
-from boxtree.distributed.util import TimeRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -605,7 +604,6 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
             expansion_factory=None,
             target_association_tolerance=_not_provided,
             cost_model=None,
-            record_timing=False,
 
             # begin undocumented arguments
             # FIXME default debug=False once everything has matured
@@ -626,7 +624,6 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
 
         self.distributed_geo_data_cache = {}
         self.cost_model = cost_model
-        self.record_timing = record_timing
 
         if current_rank == 0:
             self.next_geo_data_id = 0
@@ -708,7 +705,6 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
         obj.comm = self.comm
         obj.distributed_geo_data_cache = self.distributed_geo_data_cache
         obj.cost_model = self.cost_model
-        obj.record_timing = self.record_timing
 
         current_rank = self.comm.Get_rank()
 
@@ -765,8 +761,7 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
 
 
 def drive_dfmm(queue, src_weights, distributed_geo_data, comm=MPI.COMM_WORLD,
-               _communicate_mpoles_via_allreduce=False,
-               record_timing=False):
+               _communicate_mpoles_via_allreduce=False):
 
     current_rank = comm.Get_rank()
     total_rank = comm.Get_size()
@@ -775,17 +770,9 @@ def drive_dfmm(queue, src_weights, distributed_geo_data, comm=MPI.COMM_WORLD,
     if current_rank == 0:
         start_time = time.time()
 
-    if record_timing:
-        distribute_wrangler_recorder = TimeRecorder(
-            "Distribute wrangler", comm, logger
-        )
-
     distributed_wrangler = QBXDistributedFMMLibExpansionWrangler.distribute(
         queue, global_wrangler, distributed_geo_data)
     wrangler = distributed_wrangler
-
-    if record_timing:
-        distribute_wrangler_recorder.record()
 
     local_traversal = distributed_geo_data.local_trav
 
@@ -797,8 +784,7 @@ def drive_dfmm(queue, src_weights, distributed_geo_data, comm=MPI.COMM_WORLD,
     from boxtree.distributed.calculation import distribute_source_weights
 
     local_source_weights = distribute_source_weights(
-        src_weights, distributed_geo_data.local_data, comm=comm,
-        record_timing=record_timing
+        src_weights, distributed_geo_data.local_data, comm=comm
     )
 
     # }}}
@@ -830,15 +816,9 @@ def drive_dfmm(queue, src_weights, distributed_geo_data, comm=MPI.COMM_WORLD,
         comm.Allreduce(mpole_exps, mpole_exps_all)
         mpole_exps = mpole_exps_all
     else:
-        communicate_mpoles(
-            wrangler, comm, local_traversal, mpole_exps,
-            record_timing=record_timing
-        )
+        communicate_mpoles(wrangler, comm, local_traversal, mpole_exps)
 
     # }}}
-
-    if record_timing:
-        interaction_timer = time.time()
 
     # {{{ direct evaluation from neighbor source boxes ("list 1")
 
@@ -932,18 +912,6 @@ def drive_dfmm(queue, src_weights, distributed_geo_data, comm=MPI.COMM_WORLD,
 
     # }}}
 
-    if record_timing:
-        logger.info(
-            "Interaction calculation finished on process {0} in {1} secs".format(
-                comm.Get_rank(), time.time() - interaction_timer
-            )
-        )
-
-    if record_timing:
-        send_potential_to_root_recorder = TimeRecorder(
-            "Send potential to root", comm, logger
-        )
-
     if current_rank != 0:  # worker process
         comm.send(non_qbx_potentials, dest=0, tag=MPITags["non_qbx_potentials"])
         comm.send(qbx_potentials, dest=0, tag=MPITags["qbx_potentials"])
@@ -1001,9 +969,6 @@ def drive_dfmm(queue, src_weights, distributed_geo_data, comm=MPI.COMM_WORLD,
         from pytools.obj_array import with_object_array_or_scalar
         result = with_object_array_or_scalar(
             reorder_and_finalize_potentials, all_potentials_in_tree_order)
-
-    if record_timing:
-        send_potential_to_root_recorder.record()
 
     if current_rank == 0:
         logger.info("Distributed FMM evaluation finished in {} secs.".format(
