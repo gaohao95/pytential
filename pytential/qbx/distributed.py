@@ -735,6 +735,9 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
 
         geo_data_id = self.comm.bcast(geo_data_id, root=0)
 
+        if geo_data_id == -1:
+            return None
+
         if geo_data_id in self.distributed_geo_data_cache:
             return self.distributed_geo_data_cache[geo_data_id]
 
