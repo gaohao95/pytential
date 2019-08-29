@@ -53,7 +53,8 @@ if current_rank == 0:  # master rank
         pre_density_discr,
         fine_order=4 * target_order,
         qbx_order=qbx_order,
-        fmm_order=fmm_order
+        fmm_order=fmm_order,
+        knl_specific_calibration_params="constant_one"
     ).with_refinement()
 
     density_discr = qbx.density_discr

@@ -45,6 +45,7 @@ class QBXDistributedFMMLibExpansionWrangler(
             distributed_wrangler = copy.copy(wrangler)
             distributed_wrangler.queue = None
             distributed_wrangler.geo_data = None
+            distributed_wrangler.rotation_data = None
             distributed_wrangler.code = None
             distributed_wrangler.tree = None
             distributed_wrangler.__class__ = cls
@@ -61,6 +62,7 @@ class QBXDistributedFMMLibExpansionWrangler(
         distributed_wrangler = comm.bcast(distributed_wrangler, root=0)
         distributed_wrangler.tree = distributed_geo_data.local_tree
         distributed_wrangler.geo_data = distributed_geo_data
+        distributed_wrangler.rotation_data = distributed_geo_data
 
         # {{{ Distribute dipole_vec
 
@@ -604,6 +606,7 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
             expansion_factory=None,
             target_association_tolerance=_not_provided,
             cost_model=None,
+            knl_specific_calibration_params=None,
 
             # begin undocumented arguments
             # FIXME default debug=False once everything has matured
@@ -623,7 +626,6 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
         current_rank = self.comm.Get_rank()
 
         self.distributed_geo_data_cache = {}
-        self.cost_model = cost_model
 
         if current_rank == 0:
             self.next_geo_data_id = 0
@@ -652,7 +654,9 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
                 _tree_kind=_tree_kind,
                 geometry_data_inspector=geometry_data_inspector,
                 fmm_backend='distributed',
-                target_stick_out_factor=target_stick_out_factor
+                target_stick_out_factor=target_stick_out_factor,
+                cost_model=cost_model,
+                knl_specific_calibration_params=knl_specific_calibration_params
             )
 
     def copy(
@@ -671,8 +675,9 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
             _from_sep_smaller_crit=None,
             _tree_kind=None,
             geometry_data_inspector=None,
-            performance_model=_not_provided,
             fmm_backend=None,
+            cost_model=_not_provided,
+            knl_specific_calibration_params=_not_provided,
 
             debug=_not_provided,
             _refined_for_global_qbx=_not_provided,
@@ -695,6 +700,8 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
             _tree_kind=_tree_kind,
             geometry_data_inspector=geometry_data_inspector,
             fmm_backend=fmm_backend,
+            cost_model=cost_model,
+            knl_specific_calibration_params=knl_specific_calibration_params,
 
             debug=debug,
             _refined_for_global_qbx=_refined_for_global_qbx,
@@ -704,7 +711,6 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
         obj.__class__ = DistributedQBXLayerPotentialSource
         obj.comm = self.comm
         obj.distributed_geo_data_cache = self.distributed_geo_data_cache
-        obj.cost_model = self.cost_model
 
         current_rank = self.comm.Get_rank()
 

@@ -4,6 +4,7 @@ import pyopencl as cl
 import numpy as np
 
 from pytential import sym, bind
+from pytential.qbx.cost import CLQBXCostModel
 from pytools import one
 
 
@@ -91,22 +92,17 @@ def get_test_density(queue, lpot_source):
 
 def calibrate_cost_model(ctx):
     queue = cl.CommandQueue(ctx)
-
-    from pytential.qbx.cost import CLQBXCostModel
-
-    perf_model = CLQBXCostModel(
-        queue, CLQBXCostModel.get_constantone_calibration_params()
-    )
+    cost_model = CLQBXCostModel(queue)
 
     model_results = []
     timing_results = []
 
     for lpot_source in training_geometries(queue):
-        lpot_source = lpot_source.copy(cost_model=perf_model)
+        lpot_source = lpot_source.copy(cost_model=cost_model)
         bound_op = get_bound_op(lpot_source)
         sigma = get_test_density(queue, lpot_source)
 
-        perf_S = bound_op.get_modeled_cost(queue, sigma=sigma)
+        cost_S = bound_op.get_modeled_cost(queue, "constant_one", sigma=sigma)
 
         # Warm-up run.
         bound_op.eval(queue, {"sigma": sigma})
@@ -115,26 +111,27 @@ def calibrate_cost_model(ctx):
             timing_data = {}
             bound_op.eval(queue, {"sigma": sigma}, timing_data=timing_data)
 
-            model_results.append(one(perf_S.values()))
-            timing_results.append(one(timing_data.values()))
+            model_results.append(cost_S)
+            timing_results.append(timing_data)
 
-    calibration_params = perf_model.estimate_calibration_params(
-        model_results, timing_results
+    calibration_params = cost_model.estimate_knl_specific_calibration_params(
+        model_results, timing_results, time_field_name="process_elapsed"
     )
 
-    return perf_model.with_calibration_params(calibration_params)
+    return calibration_params
 
 
-def test_cost_model(ctx, perf_model):
+def test_cost_model(ctx, calibration_params):
     queue = cl.CommandQueue(ctx)
+    cost_model = CLQBXCostModel(queue)
 
     for lpot_source in test_geometries(queue):
-        lpot_source = lpot_source.copy(cost_model=perf_model)
+        lpot_source = lpot_source.copy(cost_model=cost_model)
         bound_op = get_bound_op(lpot_source)
         sigma = get_test_density(queue, lpot_source)
 
-        perf_S = bound_op.get_modeled_cost(queue, sigma=sigma)
-        model_result = one(perf_S.values())
+        cost_S = bound_op.get_modeled_cost(queue, calibration_params, sigma=sigma)
+        model_result = one(cost_S.values())
 
         # Warm-up run.
         bound_op.eval(queue, {"sigma": sigma})
@@ -155,13 +152,13 @@ def test_cost_model(ctx, perf_model):
         for stage in model_result:
             print("stage: ", stage)
             print("actual: ", timing_result[stage])
-            print("predicted: ", perf_model.aggregate(model_result[stage]))
+            print("predicted: ", cost_model.aggregate(model_result[stage]))
         print("=" * 20)
 
 
 def predict_cost(ctx):
-    model = calibrate_cost_model(ctx)
-    test_cost_model(ctx, model)
+    params = calibrate_cost_model(ctx)
+    test_cost_model(ctx, params)
 
 
 if __name__ == "__main__":
