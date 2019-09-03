@@ -578,10 +578,17 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
         def drive_cost_model(
                     wrangler, strengths, geo_data, kernel, kernel_arguments):
             del strengths
-            cost_model_result = self.cost_model(
-                geo_data, kernel, kernel_arguments, calibration_params
+
+            cost_model_result = (
+                    self.cost_model(wrangler, geo_data, kernel, kernel_arguments))
+
+            from pytools.obj_array import with_object_array_or_scalar
+            output_placeholder = with_object_array_or_scalar(
+                wrangler.finalize_potentials,
+                wrangler.full_output_zeros()
             )
-            return wrangler.full_output_zeros(), cost_model_result
+
+            return output_placeholder, cost_model_result
 
         return self._dispatch_compute_potential_insn(
             queue, insn, bound_expr, evaluate,
