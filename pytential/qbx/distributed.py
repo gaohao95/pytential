@@ -9,6 +9,7 @@ import pyopencl as cl
 import logging
 import time
 from boxtree.tools import return_timing_data
+from pytools import memoize_method
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +153,7 @@ class DistributedGeoData(object):
         total_rank = comm.Get_size()
 
         self.global_wrangler = global_wrangler
+        self.queue = queue
 
         if geo_data is not None:  # master process
             traversal = geo_data.traversal()
@@ -589,11 +591,24 @@ class DistributedGeoData(object):
     def qbx_center_to_target_box_source_level(self, source_level):
         return self._qbx_center_to_target_box_source_level[source_level]
 
-    def m2l_rotation_lists(self):
-        raise NotImplementedError
+    @memoize_method
+    def build_rotation_classes_lists(self):
+        trav = self.traversal().to_device(self.queue)
+        tree = self.tree().to_device(self.queue)
 
+        from boxtree.rotation_classes import RotationClassesBuilder
+        return RotationClassesBuilder(self.queue.context)(
+            self.queue, trav, tree)[0].get(self.queue)
+
+    @memoize_method
+    def m2l_rotation_lists(self):
+        return self.build_rotation_classes_lists().from_sep_siblings_rotation_classes
+
+    @memoize_method
     def m2l_rotation_angles(self):
-        raise NotImplementedError
+        return (self
+                .build_rotation_classes_lists()
+                .from_sep_siblings_rotation_class_to_angle)
 
 # }}}
 
