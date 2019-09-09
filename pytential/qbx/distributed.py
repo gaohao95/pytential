@@ -589,6 +589,12 @@ class DistributedGeoData(object):
     def qbx_center_to_target_box_source_level(self, source_level):
         return self._qbx_center_to_target_box_source_level[source_level]
 
+    def m2l_rotation_lists(self):
+        raise NotImplementedError
+
+    def m2l_rotation_angles(self):
+        raise NotImplementedError
+
 # }}}
 
 
@@ -619,6 +625,7 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
             _box_extent_norm=None,
             _from_sep_smaller_crit=None,
             _tree_kind="adaptive",
+            _use_target_specific_qbx=None,
             geometry_data_inspector=None,
             target_stick_out_factor=_not_provided):
 
@@ -652,6 +659,7 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
                 _from_sep_smaller_crit=_from_sep_smaller_crit,
                 _from_sep_smaller_min_nsources_cumul=0,
                 _tree_kind=_tree_kind,
+                _use_target_specific_qbx=_use_target_specific_qbx,
                 geometry_data_inspector=geometry_data_inspector,
                 fmm_backend='distributed',
                 target_stick_out_factor=target_stick_out_factor,
@@ -674,6 +682,7 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
             _box_extent_norm=None,
             _from_sep_smaller_crit=None,
             _tree_kind=None,
+            _use_target_specific_qbx=_not_provided,
             geometry_data_inspector=None,
             fmm_backend=None,
             cost_model=_not_provided,
@@ -698,6 +707,7 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
             _box_extent_norm=_box_extent_norm,
             _from_sep_smaller_crit=_from_sep_smaller_crit,
             _tree_kind=_tree_kind,
+            _use_target_specific_qbx=_use_target_specific_qbx,
             geometry_data_inspector=geometry_data_inspector,
             fmm_backend=fmm_backend,
             cost_model=cost_model,
