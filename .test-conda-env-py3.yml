@@ -18,7 +18,7 @@ dependencies:
 
 - pip
 - pip:
-    - git+https://gitlab.tiker.net/inducer/boxtree
+    - git+https://gitlab.tiker.net/inducer/boxtree@distributed-fmm-global
     - git+https://github.com/inducer/pymbolic
     - git+https://github.com/inducer/loopy
     - git+https://gitlab.tiker.net/inducer/sumpy
