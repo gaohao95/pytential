@@ -749,18 +749,20 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                 cost_model = self.cost_model
 
             if self.knl_specific_calibration_params is None:
-                raise RuntimeError(
-                    "Must specify kernel-specific calibration parameters when using "
-                    "distributed FMM."
+                import warnings
+                warnings.warn(
+                    "Kernel-specific calibration parameters are not supplied when"
+                    "using distributed FMM."
                 )
-
-            knls = tuple(knl for knl in insn.kernels)
-
-            if (isinstance(self.knl_specific_calibration_params, str)
+                # TODO: supply better default calibration parameters
+                calibration_params = \
+                    AbstractQBXCostModel.get_constantone_calibration_params()
+            elif (isinstance(self.knl_specific_calibration_params, str)
                     and self.knl_specific_calibration_params == "constant_one"):
                 calibration_params = \
                     AbstractQBXCostModel.get_constantone_calibration_params()
             else:
+                knls = tuple(knl for knl in insn.kernels)
                 calibration_params = self.knl_specific_calibration_params[knls]
 
             kernel_args = {}
