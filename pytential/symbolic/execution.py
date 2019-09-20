@@ -322,6 +322,41 @@ class EvaluationMapper(EvaluationMapperBase):
 
         return result
 
+
+class DistributedEvaluationMapper(EvaluationMapper):
+    def __init__(self, comm, bound_expr, queue, context=None, timing_data=None):
+        self.comm = comm
+
+        if timing_data is not None:
+            raise NotImplementedError
+
+        if comm.Get_rank() == 0:
+            EvaluationMapper.__init__(self, bound_expr, queue, context, timing_data)
+        else:
+            self.queue = queue
+
+    def exec_compute_potential_insn(self, queue, insn, bound_expr, evaluate):
+        if self.comm.Get_rank() == 0:
+            result = EvaluationMapper.exec_compute_potential_insn(
+                self, queue, insn, bound_expr, evaluate
+            )
+        else:
+            # TODO: use evaluation mapper for launching FMM in the following code
+            from pytential.qbx.distributed import DistributedQBXLayerPotentialSource
+            lp_source = DistributedQBXLayerPotentialSource(self.comm, None, None)
+
+            distribute_geo_data = lp_source.distibuted_geo_data(
+                None, queue, None, None
+            )
+
+            from pytential.qbx.distributed import drive_dfmm
+            weights = None
+            drive_dfmm(queue, weights, distribute_geo_data, comm=self.comm)
+
+            result = None
+
+        return result
+
 # }}}
 
 
@@ -745,6 +780,30 @@ class BoundExpression(object):
         return self.eval(queue, args)
 
 
+class DistributedBoundExpression(BoundExpression):
+    def __init__(self, comm, places, sym_op_expr):
+        self.comm = comm
+        rank = comm.Get_rank()
+
+        from pytential.symbolic.compiler import DistributedCode
+
+        if rank == 0:
+            BoundExpression.__init__(self, places, sym_op_expr)
+            self.code = DistributedCode(
+                comm, self.code.instructions, self.code.result
+            )
+        else:
+            self.code = DistributedCode(comm, None, None)
+
+    def eval(self, queue, context=None, timing_data=None):
+        if context is None:
+            context = {}
+        exec_mapper = DistributedEvaluationMapper(
+            self.comm, self, queue, context, timing_data=timing_data
+        )
+        return self.code.execute(exec_mapper)
+
+
 def bind(places, expr, auto_where=None):
     """
     :arg places: a :class:`pytential.symbolic.execution.GeometryCollection`.
@@ -764,6 +823,22 @@ def bind(places, expr, auto_where=None):
     expr = _prepare_expr(places, expr)
 
     return BoundExpression(places, expr)
+
+
+def bind_distributed(comm, places, expr, auto_where=None):
+    """
+    Same as bind, except `places` and `expr` can be None on worker ranks.
+    """
+
+    if comm.Get_rank() == 0:
+        if not isinstance(places, GeometryCollection):
+            places = GeometryCollection(places, auto_where=auto_where)
+        expr = _prepare_expr(places, expr)
+    else:
+        places = None
+        expr = None
+
+    return DistributedBoundExpression(comm, places, expr)
 
 # }}}
 

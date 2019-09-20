@@ -5,6 +5,7 @@ import functools
 from sympy.core.cache import clear_cache
 import numpy as np
 from pytential.qbx.distributed import DistributedQBXLayerPotentialSource
+from pytential.symbolic.execution import bind_distributed
 from meshmode.discretization import Discretization
 from meshmode.discretization.poly_element import (
     InterpolatoryQuadratureSimplexGroupFactory)
@@ -48,28 +49,34 @@ if current_rank == 0:  # master rank
     pre_density_discr = Discretization(
         ctx, mesh, InterpolatoryQuadratureSimplexGroupFactory(target_order))
 
-    qbx, _ = DistributedQBXLayerPotentialSource(
+    qbx = DistributedQBXLayerPotentialSource(
         comm,
         pre_density_discr,
         fine_order=4 * target_order,
         qbx_order=qbx_order,
         fmm_order=fmm_order,
         knl_specific_calibration_params="constant_one"
-    ).with_refinement()
-
-    density_discr = qbx.density_discr
+    )
 
     op = pytential.sym.D(
         LaplaceKernel(2), pytential.sym.var("sigma"), qbx_forced_limit=-2)
 
+    qbx, _ = qbx.with_refinement()
+    density_discr = qbx.density_discr
     sigma = density_discr.zeros(queue) + 1
+    qbx_ctx = {"sigma": sigma}
 
     fplot = FieldPlotter(np.zeros(2), extent=0.54, npoints=30)
+    targets = PointsTarget(fplot.points)
+else:
+    qbx = None
+    targets = None
+    op = None
+    qbx_ctx = {}
 
-    fld_in_vol = pytential.bind(
-        (qbx, PointsTarget(fplot.points)),
-        op)(queue, sigma=sigma)
+fld_in_vol = bind_distributed(comm, (qbx, targets), op)(queue, **qbx_ctx)
 
+if current_rank == 0:
     err = cl.clmath.fabs(fld_in_vol - (-1))
 
     linf_err = cl.array.max(err).get()
@@ -82,12 +89,3 @@ if current_rank == 0:  # master rank
 
     # FIXME: Why does the FMM only meet this sloppy tolerance?
     assert linf_err < 1e-2
-
-else:  # helper rank
-    lp_source = DistributedQBXLayerPotentialSource(comm, None, None)
-    distribute_geo_data = lp_source.distibuted_geo_data(None, queue, None, None)
-
-    from pytential.qbx.distributed import drive_dfmm
-    wrangler = None
-    weights = None
-    drive_dfmm(queue, weights, distribute_geo_data, comm=comm)

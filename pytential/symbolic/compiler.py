@@ -417,6 +417,88 @@ class Code(object):
 
     # }}}
 
+
+class DistributedCode(Code):
+    def __init__(self, comm, instructions, result):
+        Code.__init__(self, instructions, result)
+        self.comm = comm
+
+    def execute(self, exec_mapper, pre_assign_check=None):
+        insn_type = {
+            "ASSIGN": 0,
+            "COMPUTE_POTENTIAL": 1,
+            "TERMINAL": 2
+        }
+
+        if self.comm.Get_rank() == 0:
+            context = exec_mapper.context
+
+            done_insns = set()
+
+            while True:
+                try:
+                    insn, discardable_vars = self.get_next_step(
+                            frozenset(list(context.keys())),
+                            frozenset(done_insns))
+
+                except self.NoInstructionAvailable:
+                    # no available instructions: we're done
+                    self.comm.bcast(insn_type["TERMINAL"], root=0)
+                    break
+                else:
+                    for name in discardable_vars:
+                        del context[name]
+
+                    if isinstance(insn, ComputePotentialInstruction):
+                        self.comm.bcast(insn_type["COMPUTE_POTENTIAL"], root=0)
+                    else:
+                        self.comm.bcast(insn_type["ASSIGN"], root=0)
+
+                    done_insns.add(insn)
+                    assignments = (
+                            self.get_exec_function(insn, exec_mapper)
+                            (exec_mapper.queue, insn, exec_mapper.bound_expr,
+                                exec_mapper))
+
+                    assignees = insn.get_assignees()
+                    for target, value in assignments:
+                        if pre_assign_check is not None:
+                            pre_assign_check(target, value)
+
+                        assert target in assignees
+                        context[target] = value
+
+            if len(done_insns) < len(self.instructions):
+                print("Unreachable instructions:")
+                for insn in set(self.instructions) - done_insns:
+                    print("    ", str(insn).replace("\n", "\n     "))
+                    from pymbolic import var
+                    print("     missing: ", ", ".join(
+                            str(s) for s in
+                            set(insn.get_dependencies())
+                            - set(var(v) for v in six.iterkeys(context))))
+
+                raise RuntimeError("not all instructions are reachable"
+                        "--did you forget to pass a value for a placeholder?")
+
+            from pytools.obj_array import with_object_array_or_scalar
+            return with_object_array_or_scalar(exec_mapper, self.result)
+
+        else:
+            while True:
+                current_insn_type = self.comm.bcast(None, root=0)
+
+                if current_insn_type == insn_type["ASSIGN"]:
+                    continue
+                elif current_insn_type == insn_type["TERMINAL"]:
+                    break
+                elif current_insn_type == insn_type["COMPUTE_POTENTIAL"]:
+                    exec_mapper.exec_compute_potential_insn(
+                        exec_mapper.queue, None, None, None
+                    )
+                else:
+                    raise RuntimeError("Unknown instruction type")
+
 # }}}
 
 
