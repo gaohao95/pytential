@@ -564,7 +564,7 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                 queue, insn, bound_expr, evaluate, func, extra_args)
 
     def cost_model_compute_potential_insn(self, queue, insn, bound_expr, evaluate,
-                                          calibration_params):
+                                          calibration_params, per_box):
         """Using :attr:`cost_model`, evaluate the cost of executing *insn*.
         Cost model results are gathered in
         :attr:`pytential.symbolic.execution.BoundExpression.modeled_cost`
@@ -578,17 +578,12 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
         def drive_cost_model(
                     wrangler, strengths, geo_data, kernel, kernel_arguments):
             del strengths
-            cost_model_result = self.cost_model(
-                geo_data, kernel, kernel_arguments, calibration_params
-            )
 
-            from pytools.obj_array import with_object_array_or_scalar
-            output_placeholder = with_object_array_or_scalar(
-                wrangler.finalize_potentials,
-                wrangler.full_output_zeros()
+            cost_model_result, metadata = self.cost_model(
+                geo_data, kernel, kernel_arguments, calibration_params,
+                per_box=per_box
             )
-
-            return output_placeholder, cost_model_result
+            return wrangler.full_output_zeros(), (cost_model_result, metadata)
 
         return self._dispatch_compute_potential_insn(
             queue, insn, bound_expr, evaluate,
@@ -769,11 +764,10 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
             for arg_name, arg_expr in six.iteritems(insn.kernel_arguments):
                 kernel_args[arg_name] = evaluate(arg_expr)
 
-            boxes_time = cost_model.aggregate_stage_costs_per_box(
-                geo_data.traversal(), cost_model.get_qbx_modeled_cost(
-                    geo_data, insn.base_kernel, kernel_args, calibration_params
-                )
-            ).get()
+            boxes_time, _ = cost_model.qbx_modeled_cost_per_box(
+                geo_data, insn.base_kernel, kernel_args, calibration_params
+            )
+            boxes_time = boxes_time.get()
 
             distributed_geo_data = self.distibuted_geo_data(
                 geo_data, queue, wrangler, boxes_time

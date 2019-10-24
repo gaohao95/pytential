@@ -102,7 +102,9 @@ def calibrate_cost_model(ctx):
         bound_op = get_bound_op(lpot_source)
         sigma = get_test_density(queue, lpot_source)
 
-        cost_S = bound_op.get_modeled_cost(queue, "constant_one", sigma=sigma)
+        modeled_cost, _ = bound_op.get_modeled_cost(
+            queue, "constant_one", per_box=False, sigma=sigma
+        )
 
         # Warm-up run.
         bound_op.eval(queue, {"sigma": sigma})
@@ -111,7 +113,7 @@ def calibrate_cost_model(ctx):
             timing_data = {}
             bound_op.eval(queue, {"sigma": sigma}, timing_data=timing_data)
 
-            model_results.append(cost_S)
+            model_results.append(modeled_cost)
             timing_results.append(timing_data)
 
     calibration_params = cost_model.estimate_knl_specific_calibration_params(
@@ -130,7 +132,9 @@ def test_cost_model(ctx, calibration_params):
         bound_op = get_bound_op(lpot_source)
         sigma = get_test_density(queue, lpot_source)
 
-        cost_S = bound_op.get_modeled_cost(queue, calibration_params, sigma=sigma)
+        cost_S, _ = bound_op.get_modeled_cost(
+            queue, calibration_params, per_box=False, sigma=sigma
+        )
         model_result = one(cost_S.values())
 
         # Warm-up run.
@@ -148,12 +152,18 @@ def test_cost_model(ctx, calibration_params):
                     sum(temp_timing_result[param]["process_elapsed"]
                         for temp_timing_result in temp_timing_results)) / RUNS
 
-        print("=" * 20)
+        from pytools import Table
+        table = Table()
+        table.add_row(["stage", "actual (s)", "predicted (s)"])
         for stage in model_result:
-            print("stage: ", stage)
-            print("actual: ", timing_result[stage])
-            print("predicted: ", cost_model.aggregate(model_result[stage]))
-        print("=" * 20)
+            row = [
+                    stage,
+                    "%.2f" % timing_result[stage],
+                    "%.2f" % model_result[stage]
+            ]
+            table.add_row(row)
+
+        print(table)
 
 
 def predict_cost(ctx):
