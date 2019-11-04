@@ -1,12 +1,12 @@
 import pyopencl as cl
 from pytential import bind, sym, norm
+from pytential.symbolic.execution import bind_distributed
 import numpy as np
 from sympy.core.cache import clear_cache
 from pytools.convergence import EOCRecorder
 from mpi4py import MPI
 from pytential.qbx.distributed import DistributedQBXLayerPotentialSource
 from sumpy.kernel import LaplaceKernel
-import matplotlib.pyplot as pt
 
 comm = MPI.COMM_WORLD
 current_rank = comm.Get_rank()
@@ -19,59 +19,61 @@ clear_cache()
 ctx = cl.create_some_context()
 queue = cl.CommandQueue(ctx)
 
-if current_rank == 0:
 
-    class GreenExpr(object):
-        zero_op_name = "green"
+class GreenExpr(object):
+    zero_op_name = "green"
 
-        def get_zero_op(self, kernel, **knl_kwargs):
+    def get_zero_op(self, kernel, **knl_kwargs):
 
-            u_sym = sym.var("u")
-            dn_u_sym = sym.var("dn_u")
+        u_sym = sym.var("u")
+        dn_u_sym = sym.var("dn_u")
 
-            return (
-                sym.S(kernel, dn_u_sym, qbx_forced_limit=-1, **knl_kwargs)
-                - sym.D(kernel, u_sym, qbx_forced_limit="avg", **knl_kwargs)
-                - 0.5*u_sym)
+        return (
+            sym.S(kernel, dn_u_sym, qbx_forced_limit=-1, **knl_kwargs)
+            - sym.D(kernel, u_sym, qbx_forced_limit="avg", **knl_kwargs)
+            - 0.5*u_sym)
 
-        order_drop = 0
+    order_drop = 0
 
-    def get_sphere_mesh(refinement_increment, target_order):
-        from meshmode.mesh.generation import generate_icosphere
-        mesh = generate_icosphere(1, target_order)
-        from meshmode.mesh.refinement import Refiner
 
-        refiner = Refiner(mesh)
-        for i in range(refinement_increment):
-            flags = np.ones(mesh.nelements, dtype=bool)
-            refiner.refine(flags)
-            mesh = refiner.get_current_mesh()
+def get_sphere_mesh(refinement_increment, target_order):
+    from meshmode.mesh.generation import generate_icosphere
+    mesh = generate_icosphere(1, target_order)
+    from meshmode.mesh.refinement import Refiner
 
-        return mesh
+    refiner = Refiner(mesh)
+    for i in range(refinement_increment):
+        flags = np.ones(mesh.nelements, dtype=bool)
+        refiner.refine(flags)
+        mesh = refiner.get_current_mesh()
 
-    class SphereGeometry(object):
-        mesh_name = "sphere"
-        dim = 3
+    return mesh
 
-        resolutions = [0, 1]
 
-        def get_mesh(self, resolution, tgt_order):
-            return get_sphere_mesh(resolution, tgt_order)
+class SphereGeometry(object):
+    mesh_name = "sphere"
+    dim = 3
 
-    expr = GreenExpr()
-    geometry = SphereGeometry()
-
-    target_order = 8
-    k = 0
-    qbx_order = 3
-    fmm_order = 10
     resolutions = [0, 1]
-    _expansion_stick_out_factor = 0.5
-    visualize = False
 
-    eoc_rec = EOCRecorder()
+    def get_mesh(self, resolution, tgt_order):
+        return get_sphere_mesh(resolution, tgt_order)
 
-    for resolution in resolutions:
+
+target_order = 8
+k = 0
+qbx_order = 3
+fmm_order = 10
+resolutions = [0, 1]
+_expansion_stick_out_factor = 0.5
+visualize = False
+
+eoc_rec = EOCRecorder()
+
+for resolution in resolutions:
+    if current_rank == 0:
+        expr = GreenExpr()
+        geometry = SphereGeometry()
         mesh = geometry.get_mesh(resolution, target_order)
         if mesh is None:
             break
@@ -97,6 +99,7 @@ if current_rank == 0:
             pre_density_discr, 4 * target_order,
             qbx_order,
             fmm_order=fmm_order,
+            knl_specific_calibration_params="constant_one",
             _expansions_in_tree_have_extent=True,
             _expansion_stick_out_factor=_expansion_stick_out_factor
         ).with_refinement(**refiner_extra_kwargs)
@@ -135,17 +138,22 @@ if current_rank == 0:
         key = (qbx_order, geometry.mesh_name, resolution,
                expr.zero_op_name)
 
-        bound_op = bind(qbx, expr.get_zero_op(k_sym, **knl_kwargs))
-        error = bound_op(
-            queue, u=u_dev, dn_u=dn_u_dev, grad_u=grad_u_dev, k=k)
-        if 0:
-            pt.plot(error)
-            pt.show()
+        op = expr.get_zero_op(k_sym, **knl_kwargs)
+        qbx_ctx = {"u": u_dev, "dn_u": dn_u_dev, "grad_u": grad_u_dev, "k": k}
+    else:
+        qbx = None
+        op = None
+        qbx_ctx = {}
 
+    bound_op = bind_distributed(comm, qbx, op)
+    error = bound_op(queue, **qbx_ctx)
+
+    if current_rank == 0:
         linf_error_norm = norm(density_discr, queue, error, p=np.inf)
         print("--->", key, linf_error_norm)
 
-        eoc_rec.add_data_point(qbx.h_max, linf_error_norm)
+        h_max = bind(qbx, sym.h_max(qbx.ambient_dim))(queue)
+        eoc_rec.add_data_point(h_max, linf_error_norm)
 
         if visualize:
             from meshmode.discretization.visualization import make_visualizer
@@ -161,16 +169,7 @@ if current_rank == 0:
                 ("error", error),
             ])
 
+if current_rank == 0:
     print(eoc_rec)
     tgt_order = qbx_order - expr.order_drop
     assert eoc_rec.order_estimate() > tgt_order - 1.6
-
-else:
-    while True:
-        lp_source = DistributedQBXLayerPotentialSource(comm, None, None)
-        distribute_geo_data = lp_source.distibuted_geo_data(None, queue, None, None)
-
-        from pytential.qbx.distributed import drive_dfmm
-        wrangler = None
-        weights = None
-        drive_dfmm(queue, weights, distribute_geo_data, comm=comm)

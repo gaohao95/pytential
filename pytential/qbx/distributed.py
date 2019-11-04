@@ -8,7 +8,6 @@ import numpy as np
 import pyopencl as cl
 import logging
 import time
-from boxtree.tools import return_timing_data
 from pytools import memoize_method
 
 logger = logging.getLogger(__name__)
@@ -104,40 +103,11 @@ class QBXDistributedFMMLibExpansionWrangler(
 
         return distributed_wrangler
 
-    @return_timing_data
-    def eval_qbx_expansions(self, qbx_expansions):
-        geo_data = self.geo_data
-        ctt = geo_data.center_to_tree_targets()
-        global_qbx_centers = geo_data.global_qbx_centers()
-        qbx_centers = geo_data.centers()
-        qbx_radii = geo_data.expansion_radii()
-
+    def eval_qbx_output_zeros(self):
         from pytools.obj_array import make_obj_array
+        ctt = self.geo_data.center_to_tree_targets()
         output = make_obj_array([np.zeros(len(ctt.lists), self.dtype)
                                  for k in self.outputs])
-
-        all_targets = geo_data.qbx_targets()
-
-        taeval = self.get_expn_eval_routine("ta")
-
-        for isrc_center, src_icenter in enumerate(global_qbx_centers):
-            for icenter_tgt in range(
-                    ctt.starts[src_icenter],
-                    ctt.starts[src_icenter+1]):
-
-                center_itgt = ctt.lists[icenter_tgt]
-
-                center = qbx_centers[:, src_icenter]
-
-                pot, grad = taeval(
-                        rscale=qbx_radii[src_icenter],
-                        center=center,
-                        expn=qbx_expansions[src_icenter].T,
-                        ztarg=all_targets[:, center_itgt],
-                        **self.kernel_kwargs)
-
-                self.add_potgrad_onto_output(output, center_itgt, pot, grad)
-
         return output
 
 # }}}
@@ -419,6 +389,8 @@ class DistributedGeoData(object):
                 local_starts[0] = 0
 
                 for icenter in range(ncenters):
+                    # skip the current center if irank is not responsible for
+                    # processing it
                     if not centers_mask[icenter]:
                         continue
 
@@ -599,6 +571,9 @@ class DistributedGeoData(object):
         from boxtree.rotation_classes import RotationClassesBuilder
         return RotationClassesBuilder(self.queue.context)(
             self.queue, trav, tree)[0].get(self.queue)
+
+    def eval_qbx_targets(self):
+        return self.qbx_targets()
 
     @memoize_method
     def m2l_rotation_lists(self):
@@ -916,10 +891,10 @@ def drive_dfmm(queue, src_weights, distributed_geo_data, comm=MPI.COMM_WORLD,
 
     # {{{ propagate local_exps downward
 
-    wrangler.refine_locals(
+    local_exps = wrangler.refine_locals(
         local_traversal.level_start_target_or_target_parent_box_nrs,
         local_traversal.target_or_target_parent_boxes,
-        local_exps)
+        local_exps)[0]
 
     # }}}
 
@@ -943,6 +918,9 @@ def drive_dfmm(queue, src_weights, distributed_geo_data, comm=MPI.COMM_WORLD,
         wrangler.translate_box_local_to_qbx_local(local_exps)[0]
 
     qbx_potentials = wrangler.eval_qbx_expansions(qbx_expansions)[0]
+
+    qbx_potentials = qbx_potentials + \
+        wrangler.eval_target_specific_qbx_locals(local_source_weights)[0]
 
     # }}}
 
@@ -992,7 +970,7 @@ def drive_dfmm(queue, src_weights, distributed_geo_data, comm=MPI.COMM_WORLD,
             for idim in range(len(global_wrangler.outputs)):
                 all_potentials_in_tree_order[idim][
                     distributed_geo_data.qbx_target_mask[irank]
-                ] = qbx_potentials_cur_rank[idim]
+                ] += qbx_potentials_cur_rank[idim]
 
         def reorder_and_finalize_potentials(x):
             # "finalize" gives host FMMs (like FMMlib) a chance to turn the

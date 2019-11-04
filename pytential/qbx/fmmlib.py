@@ -225,6 +225,9 @@ class QBXFMMLibExpansionWrangler(FMMLibExpansionWrangler):
                 np.zeros(self.tree.ntargets, self.dtype)
                 for k in self.outputs])
 
+    def eval_qbx_output_zeros(self):
+        return self.full_output_zeros()
+
     def reorder_sources(self, source_array):
         if isinstance(source_array, cl.array.Array):
             source_array = source_array.get(queue=self.queue)
@@ -547,7 +550,7 @@ class QBXFMMLibExpansionWrangler(FMMLibExpansionWrangler):
     @log_process(logger)
     @return_timing_data
     def eval_qbx_expansions(self, qbx_expansions):
-        output = self.full_output_zeros()
+        output = self.eval_qbx_output_zeros()
 
         geo_data = self.geo_data
         ctt = geo_data.center_to_tree_targets()
@@ -555,7 +558,7 @@ class QBXFMMLibExpansionWrangler(FMMLibExpansionWrangler):
         qbx_centers = geo_data.centers()
         qbx_radii = geo_data.expansion_radii()
 
-        all_targets = geo_data.all_targets()
+        all_targets = geo_data.eval_qbx_targets()
 
         taeval = self.get_expn_eval_routine("ta")
 
@@ -582,9 +585,12 @@ class QBXFMMLibExpansionWrangler(FMMLibExpansionWrangler):
     @log_process(logger)
     @return_timing_data
     def eval_target_specific_qbx_locals(self, src_weights):
-        if not self.using_tsqbx:
-            return self.full_output_zeros()
+        output = self.eval_qbx_output_zeros()
 
+        if not self.using_tsqbx:
+            return output
+
+        noutput_targets = len(output[0])
         geo_data = self.geo_data
         trav = geo_data.traversal()
 
@@ -599,9 +605,9 @@ class QBXFMMLibExpansionWrangler(FMMLibExpansionWrangler):
         ifgrad = self.ifgrad
 
         # Create temporary output arrays for potential / gradient.
-        pot = np.zeros(self.tree.ntargets, np.complex) if ifpot else None
+        pot = np.zeros(noutput_targets, np.complex) if ifpot else None
         grad = (
-                np.zeros((self.dim, self.tree.ntargets), np.complex)
+                np.zeros((self.dim, noutput_targets), np.complex)
                 if ifgrad else None)
 
         ts.eval_target_specific_qbx_locals(
@@ -611,7 +617,7 @@ class QBXFMMLibExpansionWrangler(FMMLibExpansionWrangler):
                 ifdipole=ifdipole,
                 order=self.qbx_order,
                 sources=self._get_single_sources_array(),
-                targets=geo_data.all_targets(),
+                targets=geo_data.eval_qbx_targets(),
                 centers=self._get_single_centers_array(),
                 qbx_centers=geo_data.global_qbx_centers(),
                 qbx_center_to_target_box=geo_data.qbx_center_to_target_box(),
@@ -628,7 +634,6 @@ class QBXFMMLibExpansionWrangler(FMMLibExpansionWrangler):
                 pot=pot,
                 grad=grad)
 
-        output = self.full_output_zeros()
         self.add_potgrad_onto_output(output, slice(None), pot, grad)
 
         return output
