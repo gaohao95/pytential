@@ -726,6 +726,10 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
         """
         current_rank = self.comm.Get_rank()
 
+        '''
+        TODO: Cache is not working at the moment because workers' layer
+        potential source is recomputed after each iteration
+
         if current_rank == 0:
 
             target_discrs_and_qbx_sides = geo_data.target_discrs_and_qbx_sides
@@ -747,6 +751,8 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
         if geo_data_id in self.distributed_geo_data_cache:
             return self.distributed_geo_data_cache[geo_data_id]
 
+        '''
+
         # no cached result found, construct a new distributed_geo_data
         if current_rank == 0:
             from pytential.qbx.utils import ToHostTransferredGeoDataWrapper
@@ -761,7 +767,7 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
                 None, queue, None, None, self.comm
             )
 
-        self.distributed_geo_data_cache[geo_data_id] = distributed_geo_data
+        # self.distributed_geo_data_cache[geo_data_id] = distributed_geo_data
 
         return distributed_geo_data
 

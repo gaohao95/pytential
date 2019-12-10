@@ -27,6 +27,7 @@ THE SOFTWARE.
 
 import six
 from six.moves import zip
+import copy
 
 from pymbolic.mapper.evaluator import (
         EvaluationMapper as PymbolicEvaluationMapper)
@@ -473,6 +474,31 @@ class MatVecOp:
 
         return result
 
+
+class DistributedMatVecOp(MatVecOp):
+    def __init__(self,
+                 comm, bound_expr, queue, arg_name, dtype, total_dofs,
+                 starts_and_ends, extra_args):
+        self.comm = comm
+        MatVecOp.__init__(
+            self, bound_expr, queue, arg_name, dtype, total_dofs,
+            starts_and_ends, extra_args
+        )
+
+    @classmethod
+    def from_mat_vec_op(cls, comm, mat_vec_op):
+        distributed_mat_vec_op = copy.copy(mat_vec_op)
+        distributed_mat_vec_op.__class__ = cls
+        distributed_mat_vec_op.comm = comm
+
+        return distributed_mat_vec_op
+
+    def matvec(self, x):
+        if self.comm.Get_rank() == 0:
+            return MatVecOp.matvec(self, x)
+        else:
+            return self.bound_expr(self.queue)
+
 # }}}
 
 
@@ -802,6 +828,30 @@ class DistributedBoundExpression(BoundExpression):
             )
         else:
             self.code = DistributedCode(comm, None, None)
+
+    def get_discretization(self, where):
+        if self.comm.Get_rank() == 0:
+            return BoundExpression.get_discretization(self, where)
+        else:
+            raise RuntimeError("Discretization is not available on worker nodes")
+
+    def get_modeled_cost(self, queue, calibration_params, **args):
+        if self.comm.Get_rank() == 0:
+            return BoundExpression.get_modeled_cost(
+                self, queue, calibration_params, **args
+            )
+        else:
+            raise RuntimeError("Cost model is not available on worker nodes")
+
+    def scipy_op(self, queue, arg_name, dtype, domains=None, **extra_args):
+        if self.comm.Get_rank() == 0:
+            mat_vec_op = BoundExpression.scipy_op(
+                self, queue, arg_name, dtype, domains=None, **extra_args
+            )
+        else:
+            mat_vec_op = MatVecOp(self, queue, None, None, None, None, None)
+
+        return DistributedMatVecOp.from_mat_vec_op(self.comm, mat_vec_op)
 
     def eval(self, queue, context=None, timing_data=None):
         if context is None:
