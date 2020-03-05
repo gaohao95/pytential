@@ -591,9 +591,31 @@ class DistributedGeoData(object):
 class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
 
     def __init__(self, *args, **kwargs):
+        # process communicator argument
         comm = kwargs.pop("comm", MPI.COMM_WORLD)
         self.comm = comm
         current_rank = comm.Get_rank()
+
+        # process fmm backend argument
+        if "fmm_backend" not in kwargs:
+            kwargs["fmm_backend"] = "fmmlib"
+        elif kwargs["fmm_backend"] != "fmmlib":
+            raise NotImplementedError(
+                "Currently the distributed implementation only works with fmmlib"
+            )
+
+        # "_from_sep_smaller_min_nsources_cumul" will be forced to 0 for distributed
+        # implementation. If not, the potential contribution of a list 3 box might be
+        # computed particle-to-particle instead of using its multipole expansion.
+        # However, the particle information may not be distributed to the target
+        # rank.
+        if "_from_sep_smaller_min_nsources_cumul" not in kwargs:
+            kwargs["_from_sep_smaller_min_nsources_cumul"] = 0
+        elif kwargs["_from_sep_smaller_min_nsources_cumul"] != 0:
+            raise ValueError(
+                "_from_sep_smaller_min_nsources_cumul has to be 0 for distributed "
+                "implementation"
+            )
 
         self.distributed_geo_data_cache = {}
 
@@ -601,7 +623,6 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
             self.next_geo_data_id = 0
             self.arg_to_id = {}
 
-        if current_rank == 0:
             super(DistributedQBXLayerPotentialSource, self).__init__(*args, **kwargs)
 
     def copy(self, *args, **kwargs):

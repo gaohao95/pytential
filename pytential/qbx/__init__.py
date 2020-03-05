@@ -635,7 +635,7 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                     fmm_mpole_factory, fmm_local_factory, qbx_local_factory,
                     out_kernels)
 
-        elif self.fmm_backend == "fmmlib" or self.fmm_backend == 'distributed':
+        elif self.fmm_backend == "fmmlib":
             from pytential.qbx.fmmlib import \
                     QBXFMMLibExpansionWranglerCodeContainer
             return QBXFMMLibExpansionWranglerCodeContainer(
@@ -735,7 +735,8 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
 
         # {{{ execute global QBX
 
-        if self.fmm_backend == 'distributed':
+        from pytential.qbx.distributed import DistributedQBXLayerPotentialSource
+        if isinstance(self, DistributedQBXLayerPotentialSource):
             # FIXME: If the expansion wrangler is not FMMLib, the argument
             # 'uses_pde_expansions' might be different
             if self.cost_model is None:
