@@ -467,14 +467,15 @@ def run_int_eq_test(cl_ctx, queue, case, resolution, visualize):
                 qbx_lpot_kwargs["fmm_order"] = case.qbx_order + 5
 
         qbx = DistributedQBXLayerPotentialSource(
-            comm,
             pre_density_discr,
+            comm=comm,
             fine_order=source_order,
             qbx_order=case.qbx_order,
             _box_extent_norm=getattr(case, "box_extent_norm", None),
             _from_sep_smaller_crit=getattr(case, "from_sep_smaller_crit", None),
-            # _from_sep_smaller_min_nsources_cumul=30,
+            _from_sep_smaller_min_nsources_cumul=0,
             knl_specific_calibration_params="constant_one",
+            fmm_backend="distributed",
             **qbx_lpot_kwargs
         )
 

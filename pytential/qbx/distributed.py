@@ -1,5 +1,5 @@
 from pytential.qbx.fmmlib import QBXFMMLibExpansionWrangler
-from pytential.qbx import QBXLayerPotentialSource, _not_provided
+from pytential.qbx import QBXLayerPotentialSource
 from boxtree.distributed.calculation import DistributedFMMLibExpansionWrangler
 from boxtree.tree import FilteredTargetListsInTreeOrder
 from boxtree.distributed.partition import ResponsibleBoxesQuery
@@ -590,37 +590,10 @@ class DistributedGeoData(object):
 
 class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
 
-    def __init__(
-            self,
-            comm,
-            density_discr,
-            fine_order,
-            qbx_order=None,
-            fmm_order=None,
-            fmm_level_to_order=None,
-            to_refined_connection=None,
-            expansion_factory=None,
-            target_association_tolerance=_not_provided,
-            cost_model=None,
-            knl_specific_calibration_params=None,
-
-            # begin undocumented arguments
-            # FIXME default debug=False once everything has matured
-            debug=True,
-            _refined_for_global_qbx=False,
-            _expansions_in_tree_have_extent=True,
-            _expansion_stick_out_factor=0.5,
-            _well_sep_is_n_away=2,
-            _max_leaf_refine_weight=None,
-            _box_extent_norm=None,
-            _from_sep_smaller_crit=None,
-            _tree_kind="adaptive",
-            _use_target_specific_qbx=None,
-            geometry_data_inspector=None,
-            target_stick_out_factor=_not_provided):
-
+    def __init__(self, *args, **kwargs):
+        comm = kwargs.pop("comm", MPI.COMM_WORLD)
         self.comm = comm
-        current_rank = self.comm.Get_rank()
+        current_rank = comm.Get_rank()
 
         self.distributed_geo_data_cache = {}
 
@@ -629,91 +602,18 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
             self.arg_to_id = {}
 
         if current_rank == 0:
+            super(DistributedQBXLayerPotentialSource, self).__init__(*args, **kwargs)
 
-            super(DistributedQBXLayerPotentialSource, self).__init__(
-                density_discr,
-                fine_order,
-                qbx_order=qbx_order,
-                fmm_order=fmm_order,
-                fmm_level_to_order=fmm_level_to_order,
-                to_refined_connection=to_refined_connection,
-                expansion_factory=expansion_factory,
-                target_association_tolerance=target_association_tolerance,
-                debug=debug,
-                _refined_for_global_qbx=_refined_for_global_qbx,
-                _expansions_in_tree_have_extent=_expansions_in_tree_have_extent,
-                _expansion_stick_out_factor=_expansion_stick_out_factor,
-                _well_sep_is_n_away=_well_sep_is_n_away,
-                _max_leaf_refine_weight=_max_leaf_refine_weight,
-                _box_extent_norm=_box_extent_norm,
-                _from_sep_smaller_crit=_from_sep_smaller_crit,
-                _from_sep_smaller_min_nsources_cumul=0,
-                _tree_kind=_tree_kind,
-                _use_target_specific_qbx=_use_target_specific_qbx,
-                geometry_data_inspector=geometry_data_inspector,
-                fmm_backend='distributed',
-                target_stick_out_factor=target_stick_out_factor,
-                cost_model=cost_model,
-                knl_specific_calibration_params=knl_specific_calibration_params
-            )
+    def copy(self, *args, **kwargs):
+        comm = kwargs.pop("comm", self.comm)
+        current_rank = comm.Get_rank()
 
-    def copy(
-            self,
-            density_discr=None,
-            fine_order=None,
-            qbx_order=None,
-            fmm_order=_not_provided,
-            fmm_level_to_order=_not_provided,
-            to_refined_connection=None,
-            target_association_tolerance=_not_provided,
-            _expansions_in_tree_have_extent=_not_provided,
-            _expansion_stick_out_factor=_not_provided,
-            _max_leaf_refine_weight=None,
-            _box_extent_norm=None,
-            _from_sep_smaller_crit=None,
-            _tree_kind=None,
-            _use_target_specific_qbx=_not_provided,
-            geometry_data_inspector=None,
-            fmm_backend=None,
-            cost_model=_not_provided,
-            knl_specific_calibration_params=_not_provided,
+        obj = super(DistributedQBXLayerPotentialSource, self).copy(*args, **kwargs)
 
-            debug=_not_provided,
-            _refined_for_global_qbx=_not_provided,
-            target_stick_out_factor=_not_provided,
-    ):
+        # obj.__class__ = DistributedQBXLayerPotentialSource
+        obj.comm = comm
 
-        obj = super(DistributedQBXLayerPotentialSource, self).copy(
-            density_discr=density_discr,
-            fine_order=fine_order,
-            qbx_order=qbx_order,
-            fmm_order=fmm_order,
-            fmm_level_to_order=fmm_level_to_order,
-            to_refined_connection=to_refined_connection,
-            target_association_tolerance=target_association_tolerance,
-            _expansions_in_tree_have_extent=_expansions_in_tree_have_extent,
-            _expansion_stick_out_factor=_expansion_stick_out_factor,
-            _max_leaf_refine_weight=_max_leaf_refine_weight,
-            _box_extent_norm=_box_extent_norm,
-            _from_sep_smaller_crit=_from_sep_smaller_crit,
-            _tree_kind=_tree_kind,
-            _use_target_specific_qbx=_use_target_specific_qbx,
-            geometry_data_inspector=geometry_data_inspector,
-            fmm_backend=fmm_backend,
-            cost_model=cost_model,
-            knl_specific_calibration_params=knl_specific_calibration_params,
-
-            debug=debug,
-            _refined_for_global_qbx=_refined_for_global_qbx,
-            target_stick_out_factor=target_stick_out_factor,
-        )
-
-        obj.__class__ = DistributedQBXLayerPotentialSource
-        obj.comm = self.comm
         obj.distributed_geo_data_cache = self.distributed_geo_data_cache
-
-        current_rank = self.comm.Get_rank()
-
         if current_rank == 0:
             obj.next_geo_data_id = self.next_geo_data_id
             obj.arg_to_id = self.arg_to_id
