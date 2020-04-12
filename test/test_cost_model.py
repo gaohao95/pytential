@@ -39,7 +39,7 @@ from pytential import bind, sym, norm  # noqa
 from pytools import one
 
 from pytential.qbx.cost import (
-    CLQBXCostModel, PythonQBXCostModel, pde_aware_translation_cost_model
+    QBXCostModel, _PythonQBXCostModel, make_pde_aware_translation_cost_model
 )
 
 import time
@@ -91,13 +91,15 @@ def test_compare_cl_and_py_cost_model(ctx_factory):
 
     # {{{ Construct cost models
 
-    cl_cost_model = CLQBXCostModel(queue)
-    python_cost_model = PythonQBXCostModel()
+    cl_cost_model = QBXCostModel(queue)
+    python_cost_model = _PythonQBXCostModel()
 
     tree = geo_data.tree()
-    xlat_cost = pde_aware_translation_cost_model(tree.targets.shape[0], tree.nlevels)
+    xlat_cost = make_pde_aware_translation_cost_model(
+        tree.targets.shape[0], tree.nlevels
+    )
 
-    constant_one_params = CLQBXCostModel.get_constantone_calibration_params()
+    constant_one_params = QBXCostModel.get_unit_calibration_params()
     constant_one_params["p_qbx"] = 5
     for ilevel in range(tree.nlevels):
         constant_one_params["p_fmm_lev%d" % ilevel] = 10
@@ -330,12 +332,12 @@ def get_density(queue, lpot_source):
 
 # {{{ test that timing data gathering can execute succesfully
 
-def test_timing_data_gathering(ctx_getter):
+def test_timing_data_gathering(ctx_factory):
     """Test that timing data gathering can execute succesfully."""
 
     pytest.importorskip("pyfmmlib")
 
-    cl_ctx = ctx_getter()
+    cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx,
             properties=cl.command_queue_properties.PROFILING_ENABLE)
 
@@ -365,16 +367,16 @@ def test_timing_data_gathering(ctx_getter):
     (2, False, True),
     (3, False, True),
     (3, True, True)))
-def test_cost_model(ctx_getter, dim, use_target_specific_qbx, per_box):
+def test_cost_model(ctx_factory, dim, use_target_specific_qbx, per_box):
     """Test that cost model gathering can execute successfully."""
-    cl_ctx = ctx_getter()
+    cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
 
     lpot_source = (
             get_lpot_source(queue, dim)
             .copy(
                 _use_target_specific_qbx=use_target_specific_qbx,
-                cost_model=CLQBXCostModel(queue)))
+                cost_model=QBXCostModel(queue)))
 
     sigma = get_density(queue, lpot_source)
 
@@ -383,18 +385,28 @@ def test_cost_model(ctx_getter, dim, use_target_specific_qbx, per_box):
 
     sym_op_S = sym.S(k_sym, sigma_sym, qbx_forced_limit=+1)
     op_S = bind(lpot_source, sym_op_S)
-    cost_S, _ = op_S.get_modeled_cost(
-        queue, "constant_one", per_box=per_box, sigma=sigma
-    )
+
+    if per_box:
+        cost_S, _ = op_S.cost_per_box(queue, "constant_one", sigma=sigma)
+    else:
+        cost_S, _ = op_S.cost_per_stage(queue, "constant_one", sigma=sigma)
+
     assert len(cost_S) == 1
 
     sym_op_S_plus_D = (
             sym.S(k_sym, sigma_sym, qbx_forced_limit=+1)
-            + sym.D(k_sym, sigma_sym))
+            + sym.D(k_sym, sigma_sym, qbx_forced_limit="avg"))
     op_S_plus_D = bind(lpot_source, sym_op_S_plus_D)
-    cost_S_plus_D, _ = op_S_plus_D.get_modeled_cost(
-        queue, "constant_one", per_box=per_box, sigma=sigma
-    )
+
+    if per_box:
+        cost_S_plus_D, _ = op_S_plus_D.cost_per_box(
+            queue, "constant_one", sigma=sigma
+        )
+    else:
+        cost_S_plus_D, _ = op_S_plus_D.cost_per_stage(
+            queue, "constant_one", sigma=sigma
+        )
+
     assert len(cost_S_plus_D) == 2
 
 # }}}
@@ -402,9 +414,9 @@ def test_cost_model(ctx_getter, dim, use_target_specific_qbx, per_box):
 
 # {{{ test cost model metadata gathering
 
-def test_cost_model_metadata_gathering(ctx_getter):
+def test_cost_model_metadata_gathering(ctx_factory):
     """Test that the cost model correctly gathers metadata."""
-    cl_ctx = ctx_getter()
+    cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
 
     from sumpy.expansion.level_to_order import SimpleExpansionOrderFinder
@@ -423,8 +435,9 @@ def test_cost_model_metadata_gathering(ctx_getter):
     sym_op_S = sym.S(k_sym, sigma_sym, qbx_forced_limit=+1, k=sym.var("k"))
     op_S = bind(lpot_source, sym_op_S)
 
-    _, metadata = op_S.get_modeled_cost(
-        queue, "constant_one", sigma=sigma, k=k, per_box=False, return_metadata=True)
+    _, metadata = op_S.cost_per_stage(
+        queue, "constant_one", sigma=sigma, k=k, return_metadata=True
+    )
     metadata = one(metadata.values())
 
     geo_data = lpot_source.qbx_fmm_geometry_data(
@@ -663,13 +676,13 @@ class OpCountingTranslationCostModel(object):
         (3, False, True),
         (3, True,  False),
         (3, True,  True)))
-def test_cost_model_correctness(ctx_getter, dim, off_surface,
+def test_cost_model_correctness(ctx_factory, dim, off_surface,
         use_target_specific_qbx):
     """Check that computed cost matches that of a constant-one FMM."""
-    cl_ctx = ctx_getter()
+    cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
 
-    cost_model = CLQBXCostModel(
+    cost_model = QBXCostModel(
         queue, translation_cost_model_factory=OpCountingTranslationCostModel
     )
 
@@ -700,9 +713,7 @@ def test_cost_model_correctness(ctx_getter, dim, off_surface,
     sigma = get_density(queue, lpot_source)
 
     from pytools import one
-    modeled_time, _ = op_S.get_modeled_cost(
-        queue, "constant_one", per_box=False, sigma=sigma
-    )
+    modeled_time, _ = op_S.cost_per_stage(queue, "constant_one", sigma=sigma)
     modeled_time = one(modeled_time.values())
 
     # Run FMM with ConstantOneWrangler. This can't be done with pytential's
@@ -742,12 +753,11 @@ def test_cost_model_correctness(ctx_getter, dim, off_surface,
     for stage in timing_data:
         total_cost += timing_data[stage]["ops_elapsed"]
 
-    per_box_cost, _ = op_S.get_modeled_cost(
-        queue, "constant_one", per_box=True, sigma=sigma
-    )
+    per_box_cost, _ = op_S.cost_per_box(queue, "constant_one", sigma=sigma)
+    print(per_box_cost)
     per_box_cost = one(per_box_cost.values())
 
-    total_aggregate_cost = cost_model.aggregate(per_box_cost)
+    total_aggregate_cost = cost_model.aggregate_over_boxes(per_box_cost)
     assert total_cost == (
             total_aggregate_cost
             + modeled_time["coarsen_multipoles"]
@@ -761,12 +771,12 @@ def test_cost_model_correctness(ctx_getter, dim, off_surface,
 
 # {{{ test order varying by level
 
-def test_cost_model_order_varying_by_level(ctx_getter):
+def test_cost_model_order_varying_by_level(ctx_factory):
     """For FMM order varying by level, this checks to ensure that the costs are
     different. The varying-level case should have larger cost.
     """
 
-    cl_ctx = ctx_getter()
+    cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
 
     # {{{ constant level to order
@@ -775,7 +785,7 @@ def test_cost_model_order_varying_by_level(ctx_getter):
         return 1
 
     lpot_source = get_lpot_source(queue, 2).copy(
-            cost_model=CLQBXCostModel(queue),
+            cost_model=QBXCostModel(queue),
             fmm_level_to_order=level_to_order_constant)
 
     sigma_sym = sym.var("sigma")
@@ -785,8 +795,8 @@ def test_cost_model_order_varying_by_level(ctx_getter):
 
     sigma = get_density(queue, lpot_source)
 
-    cost_constant, metadata = bind(lpot_source, sym_op).get_modeled_cost(
-        queue, "constant_one", per_box=False, sigma=sigma
+    cost_constant, metadata = bind(lpot_source, sym_op).cost_per_stage(
+        queue, "constant_one", sigma=sigma
     )
 
     cost_constant = one(cost_constant.values())
@@ -800,13 +810,13 @@ def test_cost_model_order_varying_by_level(ctx_getter):
         return metadata["nlevels"] - level
 
     lpot_source = get_lpot_source(queue, 2).copy(
-            cost_model=CLQBXCostModel(queue),
+            cost_model=QBXCostModel(queue),
             fmm_level_to_order=level_to_order_varying)
 
     sigma = get_density(queue, lpot_source)
 
-    cost_varying, _ = bind(lpot_source, sym_op).get_modeled_cost(
-        queue, "constant_one", per_box=False, sigma=sigma
+    cost_varying, _ = bind(lpot_source, sym_op).cost_per_stage(
+        queue, "constant_one", sigma=sigma
     )
 
     cost_varying = one(cost_varying.values())

@@ -10,14 +10,15 @@ dependencies:
 - pocl
 - islpy
 - pyopencl
-- python>=3.6
-- symengine=0.3.0
-- python-symengine=0.3.0
+- python=3
+- python-symengine=0.6.0
 - pyfmmlib
 - cython
+- gmsh
 
 - pip
 - pip:
+    - git+https://github.com/inducer/pytools
     - git+https://github.com/gaohao95/boxtree@distributed-fmm-global
     - git+https://github.com/inducer/pymbolic
     - git+https://github.com/inducer/loopy

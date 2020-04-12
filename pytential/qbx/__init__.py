@@ -30,7 +30,7 @@ from pytools import memoize_method
 from meshmode.discretization import Discretization
 from pytential.qbx.target_assoc import QBXTargetAssociationFailedException
 from pytential.source import LayerPotentialSourceBase
-from pytential.qbx.cost import AbstractQBXCostModel, CLQBXCostModel
+from pytential.qbx.cost import AbstractQBXCostModel, QBXCostModel
 
 import pyopencl as cl
 
@@ -226,6 +226,11 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
         self._use_target_specific_qbx = _use_target_specific_qbx
         self.geometry_data_inspector = geometry_data_inspector
 
+        if cost_model is None:
+            from pytential.qbx.cost import QBXCostModel
+            queue = cl.CommandQueue(self.cl_context)
+            cost_model = QBXCostModel(queue)
+
         self.cost_model = cost_model
         self.knl_specific_calibration_params = knl_specific_calibration_params
 
@@ -242,6 +247,7 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
             fmm_order=_not_provided,
             fmm_level_to_order=_not_provided,
             to_refined_connection=None,
+            expansion_factory=None,
             target_association_tolerance=_not_provided,
             _expansions_in_tree_have_extent=_not_provided,
             _expansion_stick_out_factor=_not_provided,
@@ -306,6 +312,8 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                 target_association_tolerance=target_association_tolerance,
                 to_refined_connection=(
                     to_refined_connection or self._to_refined_connection),
+                expansion_factory=(
+                    expansion_factory or self.expansion_factory),
 
                 debug=(
                     # False is a valid value here
@@ -579,10 +587,15 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                     wrangler, strengths, geo_data, kernel, kernel_arguments):
             del strengths
 
-            cost_model_result, metadata = self.cost_model(
-                geo_data, kernel, kernel_arguments, calibration_params,
-                per_box=per_box
-            )
+            if per_box:
+                cost_model_result, metadata = self.cost_model.qbx_cost_per_box(
+                    geo_data, kernel, kernel_arguments, calibration_params
+                )
+            else:
+                cost_model_result, metadata = self.cost_model.qbx_cost_per_stage(
+                    geo_data, kernel, kernel_arguments, calibration_params
+                )
+
             return wrangler.full_output_zeros(), (cost_model_result, metadata)
 
         return self._dispatch_compute_potential_insn(
@@ -740,7 +753,7 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
             # FIXME: If the expansion wrangler is not FMMLib, the argument
             # 'uses_pde_expansions' might be different
             if self.cost_model is None:
-                cost_model = CLQBXCostModel(queue)
+                cost_model = QBXCostModel(queue)
             else:
                 cost_model = self.cost_model
 

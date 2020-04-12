@@ -1,10 +1,37 @@
+from __future__ import division, print_function
+
+__copyright__ = """
+    Copyright (C) 2018 Matt Wala
+    Copyright (C) 2019 Hao Gao
+"""
+
+__license__ = """
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+"""
+
 """Calibrates a cost model and reports on the accuracy."""
 
 import pyopencl as cl
 import numpy as np
 
 from pytential import sym, bind
-from pytential.qbx.cost import CLQBXCostModel
+from pytential.qbx.cost import QBXCostModel
 from pytools import one
 
 
@@ -92,7 +119,7 @@ def get_test_density(queue, lpot_source):
 
 def calibrate_cost_model(ctx):
     queue = cl.CommandQueue(ctx)
-    cost_model = CLQBXCostModel(queue)
+    cost_model = QBXCostModel(queue)
 
     model_results = []
     timing_results = []
@@ -102,9 +129,7 @@ def calibrate_cost_model(ctx):
         bound_op = get_bound_op(lpot_source)
         sigma = get_test_density(queue, lpot_source)
 
-        modeled_cost, _ = bound_op.get_modeled_cost(
-            queue, "constant_one", per_box=False, sigma=sigma
-        )
+        modeled_cost, _ = bound_op.cost_per_stage(queue, "constant_one", sigma=sigma)
 
         # Warm-up run.
         bound_op.eval(queue, {"sigma": sigma})
@@ -125,16 +150,14 @@ def calibrate_cost_model(ctx):
 
 def test_cost_model(ctx, calibration_params):
     queue = cl.CommandQueue(ctx)
-    cost_model = CLQBXCostModel(queue)
+    cost_model = QBXCostModel(queue)
 
     for lpot_source in test_geometries(queue):
         lpot_source = lpot_source.copy(cost_model=cost_model)
         bound_op = get_bound_op(lpot_source)
         sigma = get_test_density(queue, lpot_source)
 
-        cost_S, _ = bound_op.get_modeled_cost(
-            queue, calibration_params, per_box=False, sigma=sigma
-        )
+        cost_S, _ = bound_op.cost_per_stage(queue, calibration_params, sigma=sigma)
         model_result = one(cost_S.values())
 
         # Warm-up run.

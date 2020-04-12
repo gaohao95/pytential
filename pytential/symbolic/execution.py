@@ -397,7 +397,7 @@ class CostModelMapper(EvaluationMapperBase):
         if (isinstance(self.knl_specific_calibration_params, str)
                 and self.knl_specific_calibration_params == "constant_one"):
             calibration_params = \
-                AbstractQBXCostModel.get_constantone_calibration_params()
+                AbstractQBXCostModel.get_unit_calibration_params()
         else:
             calibration_params = self.knl_specific_calibration_params[knls]
 
@@ -716,8 +716,9 @@ class BoundExpression(object):
     """An expression readied for evaluation by binding it to a
     :class:`GeometryCollection`.
 
-    .. automethod :: get_modeled_cost
-    .. automethod :: scipy_pop
+    .. automethod :: cost_per_stage
+    .. automethod :: cost_per_box
+    .. automethod :: scipy_op
     .. automethod :: eval
     .. automethod :: __call__
 
@@ -735,11 +736,35 @@ class BoundExpression(object):
     def get_discretization(self, where):
         return self.places.get_discretization(where)
 
-    def get_modeled_cost(self, queue, calibration_params, **args):
-        per_box = args.pop('per_box', True)
-
+    def cost_per_stage(self, queue, calibration_params, **args):
+        """
+        :arg queue: a :class:`pyopencl.CommandQueue` object.
+        :arg calibration_params: either a :class:`dict` returned by
+            `estimate_knl_specific_calibration_params`, or a :class:`str`
+            "constant_one".
+        :return: a :class:`dict` mapping from instruction to per-stage cost. Each
+            per-stage cost is represented by a :class:`dict` mapping from the stage
+            name to the predicted time.
+        """
         cost_model_mapper = CostModelMapper(
-            self, queue, calibration_params, per_box, args
+            self, queue, calibration_params, False, args
+        )
+        self.code.execute(cost_model_mapper)
+        return cost_model_mapper.get_modeled_cost()
+
+    def cost_per_box(self, queue, calibration_params, **args):
+        """
+        :arg queue: a :class:`pyopencl.CommandQueue` object.
+        :arg calibration_params: either a :class:`dict` returned by
+            `estimate_knl_specific_calibration_params`, or a :class:`str`
+            "constant_one".
+        :return: a :class:`dict` mapping from instruction to per-box cost. Each
+            per-box cost is represented by a :class:`numpy.ndarray` or
+            :class:`pyopencl.array.Array` of shape (nboxes,), where the ith entry
+            represents the cost of all stages for box i.
+        """
+        cost_model_mapper = CostModelMapper(
+            self, queue, calibration_params, True, args
         )
         self.code.execute(cost_model_mapper)
         return cost_model_mapper.get_modeled_cost()
@@ -754,7 +779,7 @@ class BoundExpression(object):
             to be a key in :attr:`places`.
         :returns: An object that (mostly) satisfies the
             :mod:`scipy.linalg.LinearOperator` protocol, except for accepting
-            and returning :clas:`pyopencl.array.Array` arrays.
+            and returning :class:`pyopencl.array.Array` arrays.
         """
 
         from pytools.obj_array import is_obj_array
@@ -787,7 +812,7 @@ class BoundExpression(object):
 
     def eval(self, queue, context=None, timing_data=None):
         """Evaluate the expression in *self*, using the
-        :clas:`pyopencl.CommandQueue` *queue* and the
+        :class:`pyopencl.CommandQueue` *queue* and the
         input variables given in the dictionary *context*.
 
         :arg timing_data: A dictionary into which timing
@@ -805,7 +830,7 @@ class BoundExpression(object):
 
     def __call__(self, queue, **args):
         """Evaluate the expression in *self*, using the
-        :clas:`pyopencl.CommandQueue` *queue* and the
+        :class:`pyopencl.CommandQueue` *queue* and the
         input variables given in the dictionary *context*.
 
         :returns: the value of the expression, as a scalar,

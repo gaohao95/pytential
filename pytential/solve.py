@@ -301,7 +301,7 @@ def gmres(op, rhs, restart=None, tol=None, x0=None,
         inner_product=None,
         maxiter=None, hard_failure=None,
         no_progress_factor=None, stall_iterations=None,
-        callback=None, progress=False):
+        callback=None, progress=False, require_monotonicity=True):
     """Solve a linear system Ax=b by means of GMRES
     with restarts.
 
@@ -325,6 +325,10 @@ def gmres(op, rhs, restart=None, tol=None, x0=None,
     chopper = VectorChopper(rhs)
     stacked_rhs = chopper.stack(rhs)
 
+    stacked_x0 = x0
+    if stacked_x0 is not None:
+        stacked_x0 = chopper.stack(stacked_x0)
+
     if inner_product is None:
         inner_product = amod.vdot
 
@@ -334,11 +338,12 @@ def gmres(op, rhs, restart=None, tol=None, x0=None,
         else:
             callback = None
 
-    result = _gmres(op, stacked_rhs, restart=restart, tol=tol, x0=x0,
+    result = _gmres(op, stacked_rhs, restart=restart, tol=tol, x0=stacked_x0,
             dot=inner_product,
             maxiter=maxiter, hard_failure=hard_failure,
             no_progress_factor=no_progress_factor,
-            stall_iterations=stall_iterations, callback=callback)
+            stall_iterations=stall_iterations, callback=callback,
+            require_monotonicity=require_monotonicity)
 
     return result.copy(solution=chopper.chop(result.solution))
 
