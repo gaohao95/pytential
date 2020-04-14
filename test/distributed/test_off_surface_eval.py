@@ -50,9 +50,9 @@ if current_rank == 0:  # master rank
         ctx, mesh, InterpolatoryQuadratureSimplexGroupFactory(target_order))
 
     qbx = DistributedQBXLayerPotentialSource(
-        comm,
         pre_density_discr,
         fine_order=4 * target_order,
+        comm=comm,
         qbx_order=qbx_order,
         fmm_order=fmm_order,
         knl_specific_calibration_params="constant_one"

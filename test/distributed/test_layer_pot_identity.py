@@ -95,9 +95,10 @@ for resolution in resolutions:
         refiner_extra_kwargs = {}
 
         qbx, _ = DistributedQBXLayerPotentialSource(
-            comm,
-            pre_density_discr, 4 * target_order,
-            qbx_order,
+            pre_density_discr,
+            fine_order=4 * target_order,
+            qbx_order=qbx_order,
+            comm=comm,
             fmm_order=fmm_order,
             knl_specific_calibration_params="constant_one",
             _expansions_in_tree_have_extent=True,

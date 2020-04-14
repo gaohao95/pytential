@@ -765,11 +765,11 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                 )
                 # TODO: supply better default calibration parameters
                 calibration_params = \
-                    AbstractQBXCostModel.get_constantone_calibration_params()
+                    AbstractQBXCostModel.get_unit_calibration_params()
             elif (isinstance(self.knl_specific_calibration_params, str)
                     and self.knl_specific_calibration_params == "constant_one"):
                 calibration_params = \
-                    AbstractQBXCostModel.get_constantone_calibration_params()
+                    AbstractQBXCostModel.get_unit_calibration_params()
             else:
                 knls = tuple(knl for knl in insn.kernels)
                 calibration_params = self.knl_specific_calibration_params[knls]
@@ -778,7 +778,7 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
             for arg_name, arg_expr in six.iteritems(insn.kernel_arguments):
                 kernel_args[arg_name] = evaluate(arg_expr)
 
-            boxes_time, _ = cost_model.qbx_modeled_cost_per_box(
+            boxes_time, _ = cost_model.qbx_cost_per_box(
                 geo_data, insn.base_kernel, kernel_args, calibration_params
             )
             boxes_time = boxes_time.get()
