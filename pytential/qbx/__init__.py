@@ -771,7 +771,7 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                 calibration_params = \
                     AbstractQBXCostModel.get_unit_calibration_params()
             else:
-                knls = tuple(knl for knl in insn.kernels)
+                knls = frozenset(knl for knl in insn.kernels)
                 calibration_params = self.knl_specific_calibration_params[knls]
 
             kernel_args = {}
