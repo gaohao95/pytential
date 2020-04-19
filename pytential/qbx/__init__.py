@@ -557,6 +557,16 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
         else:
             func = self.exec_compute_potential_insn_fmm
 
+            def drive_dfmm(*args, **kwargs):
+                if return_timing_data:
+                    timing_data = {}
+                else:
+                    timing_data = None
+                kwargs.update({"timing_data": timing_data})
+
+                from pytential.qbx.distributed import drive_dfmm
+                return drive_dfmm(*args, **kwargs), timing_data
+
             def drive_fmm(wrangler, strengths, geo_data, kernel, kernel_arguments):
                 del geo_data, kernel, kernel_arguments
                 from pytential.qbx.fmm import drive_fmm
@@ -566,7 +576,11 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                     timing_data = None
                 return drive_fmm(wrangler, strengths, timing_data), timing_data
 
-            extra_args["fmm_driver"] = drive_fmm
+            from pytential.qbx.distributed import DistributedQBXLayerPotentialSource
+            if isinstance(self, DistributedQBXLayerPotentialSource):
+                extra_args["fmm_driver"] = drive_dfmm
+            else:
+                extra_args["fmm_driver"] = drive_fmm
 
         return self._dispatch_compute_potential_insn(
                 queue, insn, bound_expr, evaluate, func, extra_args)
@@ -787,12 +801,10 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                 geo_data, queue, wrangler, boxes_time
             )
 
-            from pytential.qbx.distributed import drive_dfmm
-            all_potentials_on_every_target = drive_dfmm(
+            all_potentials_on_every_target, extra_outputs = fmm_driver(
                 queue, strengths, distributed_geo_data, comm=self.comm
             )
 
-            extra_outputs = None
         else:
             # Execute global QBX.
             all_potentials_on_every_target, extra_outputs = (

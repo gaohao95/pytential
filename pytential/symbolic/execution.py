@@ -326,17 +326,23 @@ class EvaluationMapper(EvaluationMapperBase):
 
 class DistributedEvaluationMapper(EvaluationMapper):
     def __init__(self, comm, bound_expr, queue, context=None, timing_data=None):
+        """
+        Note :arg timing_data: has to be None or a valid dict across ranks. It could
+        lead to deadlock if some ranks have a valid dict but others are None.
+        """
         self.comm = comm
-
-        if timing_data is not None:
-            raise NotImplementedError
 
         if comm.Get_rank() == 0:
             EvaluationMapper.__init__(self, bound_expr, queue, context, timing_data)
         else:
+            self.timing_data = timing_data
             self.queue = queue
 
     def exec_compute_potential_insn(self, queue, insn, bound_expr, evaluate):
+        return_timing_data = self.timing_data is not None
+        if return_timing_data:
+            insn_str = self.comm.bcast(str(insn), root=0)
+
         if self.comm.Get_rank() == 0:
             result = EvaluationMapper.exec_compute_potential_insn(
                 self, queue, insn, bound_expr, evaluate
@@ -350,11 +356,23 @@ class DistributedEvaluationMapper(EvaluationMapper):
                 None, queue, None, None
             )
 
+            if return_timing_data:
+                timing_data = {}
+            else:
+                timing_data = None
+
             from pytential.qbx.distributed import drive_dfmm
             weights = None
-            drive_dfmm(queue, weights, distribute_geo_data, comm=self.comm)
+            result = drive_dfmm(
+                queue, weights, distribute_geo_data, comm=self.comm,
+                timing_data=timing_data
+            )
 
-            result = None
+            if return_timing_data:
+                # The compiler ensures this.
+                assert insn not in self.timing_data
+
+                self.timing_data[insn_str] = timing_data
 
         return result
 
