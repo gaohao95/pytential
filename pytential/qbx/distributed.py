@@ -945,6 +945,8 @@ def drive_dfmm(queue, src_weights, distributed_geo_data, comm=MPI.COMM_WORLD,
 
     else:  # master process
 
+        merge_start_time = time.time()
+
         all_potentials_in_tree_order = global_wrangler.full_output_zeros()
 
         nqbtl = global_wrangler.geo_data.non_qbx_box_target_lists()
@@ -995,6 +997,11 @@ def drive_dfmm(queue, src_weights, distributed_geo_data, comm=MPI.COMM_WORLD,
         from pytools.obj_array import with_object_array_or_scalar
         result = with_object_array_or_scalar(
             reorder_and_finalize_potentials, all_potentials_in_tree_order)
+
+        timing_future = DummyTimingFuture(
+            wall_elapsed=(time.time() - merge_start_time)
+        )
+        recorder.add("merge potentials", timing_future)
 
     if current_rank == 0:
         logger.info("Distributed FMM evaluation finished in {} secs.".format(
