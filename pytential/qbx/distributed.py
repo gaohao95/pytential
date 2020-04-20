@@ -145,8 +145,6 @@ class DistributedGeoData(object):
                 qbx_center_to_target_box_source_level[level] = (
                     geo_data.qbx_center_to_target_box_source_level(level))
 
-            start_time = time.time()
-
         else:  # worker process
             traversal = None
 
@@ -196,6 +194,8 @@ class DistributedGeoData(object):
         # {{{ Distribute non_qbx_box_target_lists
 
         if current_rank == 0:  # master process
+            start_time = time.time()
+
             from boxtree.distributed.local_tree import get_fetch_local_particles_knls
             knls = get_fetch_local_particles_knls(queue.context, tree)
 
@@ -272,6 +272,10 @@ class DistributedGeoData(object):
 
             for irank in range(1, total_rank):
                 reqs[irank].wait()
+
+            logger.info("Distribute non_qbx_box_target_lists in {} secs.".format(
+                time.time() - start_time))
+
         if current_rank == 0:
             local_non_qbx_box_target_lists = local_non_qbx_box_target_lists[0]
         else:
@@ -292,6 +296,8 @@ class DistributedGeoData(object):
         # {{{ Distribute other useful fields of geo_data
 
         if current_rank == 0:
+            start_time = time.time()
+
             local_global_qbx_centers = np.empty((total_rank,), dtype=object)
             local_centers = np.empty((total_rank,), dtype=object)
             local_expansion_radii = np.empty((total_rank,), dtype=object)
@@ -618,6 +624,10 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
                 "implementation"
             )
 
+        # report geometric parameters
+        report_parameters = kwargs.pop("report_parameters", False)
+        self.report_parameters = report_parameters
+
         self.distributed_geo_data_cache = {}
 
         if current_rank == 0:
@@ -628,15 +638,16 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
 
     def copy(self, *args, **kwargs):
         comm = kwargs.pop("comm", self.comm)
-        current_rank = comm.Get_rank()
+        report_parameters = kwargs.pop("report_parameters", self.report_parameters)
 
         obj = super(DistributedQBXLayerPotentialSource, self).copy(*args, **kwargs)
 
         # obj.__class__ = DistributedQBXLayerPotentialSource
         obj.comm = comm
+        obj.report_parameters = report_parameters
 
         obj.distributed_geo_data_cache = self.distributed_geo_data_cache
-        if current_rank == 0:
+        if comm.Get_rank() == 0:
             obj.next_geo_data_id = self.next_geo_data_id
             obj.arg_to_id = self.arg_to_id
 
@@ -679,6 +690,25 @@ class DistributedQBXLayerPotentialSource(QBXLayerPotentialSource):
         if current_rank == 0:
             from pytential.qbx.utils import ToHostTransferredGeoDataWrapper
             host_geo_data = ToHostTransferredGeoDataWrapper(queue, geo_data)
+
+            if self.report_parameters:
+                from pytools import Table
+                table = Table()
+                table.add_row(["name", "value"])
+
+                table.add_row(["nsources", host_geo_data.tree().nsources])
+                table.add_row(["ntargets", host_geo_data.tree().ntargets])
+                table.add_row(["ncenters", host_geo_data.ncenters])
+                table.add_row([
+                    "non-qbx targets",
+                    host_geo_data.non_qbx_box_target_lists().nfiltered_targets
+                ])
+                table.add_row([
+                    "qbx targets",
+                    host_geo_data.tree().ntargets - host_geo_data.ncenters
+                ])
+
+                print(table)
 
             distributed_geo_data = DistributedGeoData(
                 host_geo_data, queue, wrangler, boxes_time, comm=self.comm
@@ -767,12 +797,19 @@ def drive_dfmm(queue, src_weights, distributed_geo_data, comm=MPI.COMM_WORLD,
 
     from boxtree.distributed.calculation import communicate_mpoles
 
+    comm_start_time = time.time()
+
     if _communicate_mpoles_via_allreduce:
         mpole_exps_all = np.zeros_like(mpole_exps)
         comm.Allreduce(mpole_exps, mpole_exps_all)
         mpole_exps = mpole_exps_all
     else:
         communicate_mpoles(wrangler, comm, local_traversal, mpole_exps)
+
+    from boxtree.tools import DummyTimingFuture
+    timing_future = DummyTimingFuture(wall_elapsed=(time.time() - comm_start_time))
+
+    recorder.add("multipole communication", timing_future)
 
     # }}}
 
