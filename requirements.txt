@@ -6,7 +6,7 @@ git+https://github.com/inducer/modepy
 git+https://github.com/inducer/pyopencl
 git+https://github.com/inducer/islpy
 git+https://github.com/inducer/loopy
-git+https://github.com/gaohao95/boxtree@distributed-fmm-global
+git+https://gitlab.tiker.net/inducer/boxtree@distributed-fmm-global
 git+https://github.com/inducer/meshmode
 git+https://gitlab.tiker.net/inducer/sumpy
 git+https://gitlab.tiker.net/inducer/pyfmmlib

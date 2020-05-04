@@ -878,9 +878,17 @@ class DistributedBoundExpression(BoundExpression):
         else:
             raise RuntimeError("Discretization is not available on worker nodes")
 
-    def get_modeled_cost(self, queue, calibration_params, **args):
+    def cost_per_stage(self, queue, calibration_params, **args):
         if self.comm.Get_rank() == 0:
-            return BoundExpression.get_modeled_cost(
+            return BoundExpression.cost_per_stage(
+                self, queue, calibration_params, **args
+            )
+        else:
+            raise RuntimeError("Cost model is not available on worker nodes")
+
+    def cost_per_box(self, queue, calibration_params, **args):
+        if self.comm.Get_rank() == 0:
+            return BoundExpression.cost_per_box(
                 self, queue, calibration_params, **args
             )
         else:

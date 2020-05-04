@@ -797,12 +797,12 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
             )
             boxes_time = boxes_time.get()
 
-            distributed_geo_data = self.distibuted_geo_data(
+            distributed_geo_data = self.distibuted_geo_data(  # noqa pylint:disable=no-member
                 geo_data, queue, wrangler, boxes_time
             )
 
             all_potentials_on_every_target, extra_outputs = fmm_driver(
-                queue, strengths, distributed_geo_data, comm=self.comm
+                queue, strengths, distributed_geo_data, comm=self.comm  # noqa pylint:disable=no-member
             )
 
         else:
