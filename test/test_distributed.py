@@ -105,7 +105,7 @@ def _test_off_surface_eval(ctx_factory, use_fmm, do_plot=False):
 
 @pytest.mark.mpi
 @pytest.mark.parametrize("num_processes, use_fmm", [
-    (4, False),
+    # (4, False),
     (4, True)
 ])
 @pytest.mark.skipif(sys.version_info < (3, 5),
